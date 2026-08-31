@@ -1,0 +1,23 @@
+# Build output
+/build/
+/build-*/
+/out/
+/_deps/
+
+# IDE / editor
+.vs/
+.vscode/
+.idea/
+*.user
+*.sln
+*.vcxproj*
+CMakeUserPresets.json
+compile_commands.json
+
+# Runtime
+imgui.ini
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

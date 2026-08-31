@@ -1,0 +1,7 @@
+* text=auto eol=lf
+
+*.bat        text eol=crlf
+*.png        binary
+*.ktx2       binary
+
+third_party/** linguist-vendored

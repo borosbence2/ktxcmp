@@ -1,0 +1,42 @@
+name: build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            cmake_args: ""
+          - name: macos-arm64
+            os: macos-14
+            cmake_args: "-DCMAKE_OSX_ARCHITECTURES=arm64"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Both --config and CMAKE_BUILD_TYPE are passed: the Windows runner
+      # defaults to a multi-config generator and macOS to a single-config one.
+      - name: Configure
+        run: >
+          cmake -B build -S .
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          ${{ matrix.cmake_args }}
+
+      - name: Build
+        run: cmake --build build --config RelWithDebInfo --parallel
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ktxcmp-${{ matrix.name }}
+          path: build/bin/**
+          if-no-files-found: error

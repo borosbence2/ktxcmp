@@ -1,0 +1,30 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Default (RelWithDebInfo)",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+    },
+    {
+      "name": "debug",
+      "inherits": "default",
+      "displayName": "Debug",
+      "binaryDir": "${sourceDir}/build-debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "macos-arm64",
+      "inherits": "default",
+      "displayName": "macOS arm64",
+      "cacheVariables": { "CMAKE_OSX_ARCHITECTURES": "arm64" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "default", "configurePreset": "default", "configuration": "RelWithDebInfo" },
+    { "name": "debug", "configurePreset": "debug", "configuration": "Debug" },
+    { "name": "macos-arm64", "configurePreset": "macos-arm64", "configuration": "RelWithDebInfo" }
+  ]
+}
