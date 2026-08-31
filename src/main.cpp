@@ -136,6 +136,7 @@ int main(int argc, char** argv) {
 
     ktxcmp::AppState app;
     app.uiScale = scale;
+    ktxcmp::ui::UiState uiState;
 
     // Files named on the command line. This is what "Open With" and dropping a
     // file on the executable deliver, which M8 wants for Finder too. It is not a
@@ -164,6 +165,13 @@ int main(int argc, char** argv) {
         }
         app.processPendingOpens();
 
+        // M3 moves this onto a worker pool; for now the files are small enough
+        // that a synchronous decode does not stall a frame noticeably.
+        const int levelBefore = app.view.level;
+        app.ensureDecoded(ktxcmp::Slot::A);
+        if (app.view.level != levelBefore)
+            uiState.fitRequested = true;
+
         if (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) {
             SDL_Delay(10);
             continue;
@@ -173,7 +181,7 @@ int main(int argc, char** argv) {
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
 
-        ktxcmp::ui::drawFrame(app);
+        ktxcmp::ui::drawFrame(app, uiState);
 
         ImGui::Render();
 

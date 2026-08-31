@@ -8,9 +8,12 @@ and [PLAN.md](PLAN.md) for the milestone order and the UI specification.
 
 ## Status
 
-**M1 — container layer.** Opens `.ktx2` and `.ktx`, reports format, dimensions,
-level chain, supercompression and DFD state, and lets you step the mip levels.
-No pixels are decoded yet; that is M2.
+**M2 — decode layer + viewer.** Opens `.ktx2` and `.ktx`, reports format,
+dimensions, level chain, supercompression and DFD state, decodes ASTC, BC5, BC7
+and uncompressed to RGBA32F, and displays it. Pan with the middle button or
+space-drag, zoom with the wheel, isolate channels with `1`-`4` (`0` for RGB),
+`F` to fit, `Ctrl+1` for 1:1. The status bar reads out the texel under the
+cursor. Comparison against a reference is M4.
 
 Files arrive by `File > Open`, by drag-and-drop onto the window, or as command
 line arguments (which is what "Open With" delivers).

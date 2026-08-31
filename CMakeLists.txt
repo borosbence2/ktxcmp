@@ -39,6 +39,8 @@ add_executable(ktxcmp
     src/core/Error.cpp
     src/container/FormatId.cpp
     src/container/KtxFile.cpp
+    src/decode/Decoder.cpp
+    src/ui/ImageTexture.cpp
     src/ui/Theme.cpp
     src/ui/Ui.cpp
     src/ui/Panels.cpp)
@@ -56,17 +58,19 @@ target_link_libraries(ktxcmp PRIVATE
     SDL3::Headers
     OpenGL::GL)
 
-# The container layer needs libktx unconditionally from M1 on.
-if(NOT TARGET ktx)
-    message(FATAL_ERROR "libktx target 'ktx' was not created; see cmake/Dependencies.cmake")
+# ktx_read, not ktx: the read-only libktx variant matches our scope and, more
+# importantly, leaves out libktx's bundled ASTC *encoder*. Linking that
+# alongside our decoder-only astc-encoder gives the linker two copies of the
+# same internal symbols, and it silently resolves them from whichever it sees
+# first - which on this machine meant an AVX2 build selected by libktx's own
+# CPU probe, not the SSE4.1 one we asked for.
+if(NOT TARGET ktx_read)
+    message(FATAL_ERROR "libktx target 'ktx_read' was not created; see cmake/Dependencies.cmake")
 endif()
-target_link_libraries(ktxcmp PRIVATE ktx)
+target_link_libraries(ktxcmp PRIVATE ktx_read)
 
-# M2 links this; built now so a dependency problem surfaces early.
-if(TARGET ${KTXCMP_ASTCDEC_TARGET})
-    target_link_libraries(ktxcmp PRIVATE ${KTXCMP_ASTCDEC_TARGET})
-    target_compile_definitions(ktxcmp PRIVATE KTXCMP_HAVE_ASTCDEC=1)
-endif()
+# The decode layer needs the ASTC decompressor from M2 on.
+target_link_libraries(ktxcmp PRIVATE ${KTXCMP_ASTCDEC_TARGET})
 
 target_include_directories(ktxcmp PRIVATE
     third_party/bcdec
@@ -92,23 +96,52 @@ endif()
 
 enable_testing()
 
-add_executable(container_test
-    tests/container_test.cpp
-    tests/Corpus.cpp
+# One writer, two readers. make_fixtures is the only binary that links the full
+# libktx: its ASTC encoder is a second copy of astc-encoder, and linking it
+# beside our decoder-only build duplicates every internal symbol.
+set(KTXCMP_LAYER_SOURCES
     src/core/Error.cpp
     src/container/FormatId.cpp
-    src/container/KtxFile.cpp)
+    src/container/KtxFile.cpp
+    src/decode/Decoder.cpp)
 
-target_include_directories(container_test PRIVATE src tests)
+add_executable(make_fixtures
+    tests/make_fixtures.cpp
+    tests/CorpusSpec.cpp
+    tests/CorpusWriter.cpp)
+target_include_directories(make_fixtures PRIVATE src tests)
+target_compile_features(make_fixtures PRIVATE cxx_std_23)
+target_link_libraries(make_fixtures PRIVATE ktx)
+
+add_executable(container_test
+    tests/container_test.cpp
+    tests/CorpusSpec.cpp
+    ${KTXCMP_LAYER_SOURCES})
+target_include_directories(container_test PRIVATE src tests third_party/bcdec)
 target_compile_features(container_test PRIVATE cxx_std_23)
-target_link_libraries(container_test PRIVATE ktx)
+target_link_libraries(container_test PRIVATE ktx_read ${KTXCMP_ASTCDEC_TARGET})
 
-if(MSVC)
-    target_compile_options(container_test PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
-else()
-    target_compile_options(container_test PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+add_executable(decode_test
+    tests/decode_test.cpp
+    tests/CorpusSpec.cpp
+    ${KTXCMP_LAYER_SOURCES})
+target_include_directories(decode_test PRIVATE src tests third_party/bcdec)
+target_compile_features(decode_test PRIVATE cxx_std_23)
+target_link_libraries(decode_test PRIVATE ktx_read ${KTXCMP_ASTCDEC_TARGET})
 
-# Generates its own corpus, so it needs nothing checked in and runs anywhere.
-add_test(NAME container
-         COMMAND container_test --synthetic "${CMAKE_CURRENT_BINARY_DIR}/corpus")
+foreach(t make_fixtures container_test decode_test)
+    if(MSVC)
+        target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
+    else()
+        target_compile_options(${t} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endforeach()
+
+set(KTXCMP_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/fixtures")
+
+add_test(NAME fixtures COMMAND make_fixtures "${KTXCMP_FIXTURE_DIR}")
+set_tests_properties(fixtures PROPERTIES FIXTURES_SETUP corpus)
+
+add_test(NAME container COMMAND container_test --corpus "${KTXCMP_FIXTURE_DIR}")
+add_test(NAME decode COMMAND decode_test "${KTXCMP_FIXTURE_DIR}")
+set_tests_properties(container decode PROPERTIES FIXTURES_REQUIRED corpus)

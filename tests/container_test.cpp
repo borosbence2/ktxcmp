@@ -1,10 +1,10 @@
 // Container-layer harness. Hand-rolled rather than a framework (CLAUDE.md).
 //
-//   container_test --synthetic [dir]   generate a corpus and check it
-//   container_test <file>...           report on and check real files
+//   container_test --corpus <dir>   check the fixtures make_fixtures wrote
+//   container_test <file>...        report on and check real files
 //
-// The synthetic mode needs no committed binaries and no local textures, so CI
-// runs the same checks this machine does. Exit code is the number of failures.
+// The corpus mode needs no committed binaries and no local textures, so CI runs
+// the same checks this machine does. Exit code is 1 if any check failed.
 
 #include "Corpus.hpp"
 
@@ -115,13 +115,9 @@ int runRealFiles(int argc, char** argv) {
     return g_failures;
 }
 
-int runSynthetic(const std::filesystem::path& dir) {
-    std::printf("generating corpus in %s\n", dir.string().c_str());
-    const auto expectations = ktxcmp::test::generateCorpus(dir);
-    if (expectations.empty()) {
-        std::printf("FAIL  the corpus generator produced nothing\n");
-        return 1;
-    }
+int runCorpus(const std::filesystem::path& dir) {
+    std::printf("checking corpus in %s\n", dir.string().c_str());
+    const auto expectations = ktxcmp::test::corpusExpectations();
     std::printf("%zu files\n\n", expectations.size());
 
     for (const auto& want : expectations) {
@@ -174,12 +170,9 @@ int runSynthetic(const std::filesystem::path& dir) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc >= 2 && std::string(argv[1]) == "--synthetic") {
-        const std::filesystem::path dir =
-            argc >= 3 ? std::filesystem::path(argv[2])
-                      : std::filesystem::temp_directory_path() / "ktxcmp_corpus";
-        runSynthetic(dir);
-    } else if (argc >= 2) {
+    if (argc >= 3 && std::string(argv[1]) == "--corpus") {
+        runCorpus(std::filesystem::path(argv[2]));
+    } else if (argc >= 2 && std::string(argv[1]) != "--corpus") {
         runRealFiles(argc, argv);
     } else {
         std::printf("usage: container_test --synthetic [dir]\n"

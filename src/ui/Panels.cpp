@@ -10,7 +10,9 @@
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <cfloat>
+#include <cmath>
 #include <cstdio>
 #include <string>
 
@@ -184,35 +186,140 @@ void drawViewModeRow(AppState& app) {
     }
 }
 
-void drawViewportBody(const AppState& app, float height) {
+// Wheel zooms about the cursor, middle drag or space+drag pans. Filtering is a
+// texture parameter: nearest when magnified, box-filtered mips when minified
+// (PLAN.md M2), so GL picks the right one from the actual scale.
+void drawViewportBody(AppState& app, UiState& ui, float height) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, viewportBgColor());
     ImGui::BeginChild("##viewportBody", ImVec2(0.0f, height), ImGuiChildFlags_Borders,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-    const SlotState& slot = app.slotA;
-    centeredHint(slot.loaded() ? "Decoding arrives at M2" : "No image loaded");
+    SlotState& slot = app.slotA;
+    const Surface* surface = slot.surface ? &*slot.surface : nullptr;
+    if (surface)
+        ui.texture.update(*surface, app.view.channels);
+    else
+        ui.texture.release();
 
-    const ImVec2 pos = ImGui::GetWindowPos();
+    const ImVec2 origin = ImGui::GetWindowPos();
     const ImVec2 size = ImGui::GetWindowSize();
-    const float pad = ImGui::GetStyle().FramePadding.x + 2.0f;
+    const bool haveImage = ui.texture.valid();
+    const float imgW = static_cast<float>(ui.texture.width());
+    const float imgH = static_cast<float>(ui.texture.height());
 
-    std::string dims = kEmptyValue;
-    if (slot.loaded()) {
-        const KtxInfo& info = slot.ktx->info();
-        const int level = app.view.level < info.levelCount ? app.view.level : 0;
-        dims = dimsText(info.levels[static_cast<std::size_t>(level)].w,
-                        info.levels[static_cast<std::size_t>(level)].h);
+    const bool sizeChanged =
+        std::fabs(size.x - ui.fittedW) > 0.5f || std::fabs(size.y - ui.fittedH) > 0.5f;
+    const bool imageChanged =
+        ui.texture.width() != ui.fittedTexW || ui.texture.height() != ui.fittedTexH;
+    if (haveImage && size.x > 1.0f && size.y > 1.0f &&
+        (ui.fitRequested || (ui.autoFit && (sizeChanged || imageChanged)))) {
+        const float fit = std::min(size.x / imgW, size.y / imgH);
+        ui.zoom = fit > 0.0f ? fit : 1.0f;
+        ui.panX = (size.x - imgW * ui.zoom) * 0.5f;
+        ui.panY = (size.y - imgH * ui.zoom) * 0.5f;
+        ui.fitRequested = false;
+        ui.autoFit = true;
+        ui.fittedW = size.x;
+        ui.fittedH = size.y;
+        ui.fittedTexW = ui.texture.width();
+        ui.fittedTexH = ui.texture.height();
     }
+
+    const bool hovered = ImGui::IsWindowHovered();
+    if (haveImage && hovered) {
+        const ImGuiIO& io = ImGui::GetIO();
+        if (io.MouseWheel != 0.0f) {
+            // Keep the texel under the cursor under the cursor.
+            const float factor = io.MouseWheel > 0.0f ? 1.25f : 1.0f / 1.25f;
+            const float newZoom = std::clamp(ui.zoom * factor, 0.01f, 256.0f);
+            const float cx = io.MousePos.x - origin.x - ui.panX;
+            const float cy = io.MousePos.y - origin.y - ui.panY;
+            ui.panX += cx - cx * (newZoom / ui.zoom);
+            ui.panY += cy - cy * (newZoom / ui.zoom);
+            ui.zoom = newZoom;
+            ui.autoFit = false;  // the user is driving now
+        }
+        const bool spaceDrag = ImGui::IsKeyDown(ImGuiKey_Space) &&
+                               ImGui::IsMouseDragging(ImGuiMouseButton_Left);
+        if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle) || spaceDrag) {
+            const ImVec2 delta = ImGui::GetIO().MouseDelta;
+            ui.panX += delta.x;
+            ui.panY += delta.y;
+            ui.autoFit = false;
+        }
+    }
+
+    ui.hasHover = false;
+    if (haveImage) {
+        const ImVec2 topLeft(origin.x + ui.panX, origin.y + ui.panY);
+        ImGui::SetCursorScreenPos(topLeft);
+        ImGui::Image(static_cast<ImTextureID>(ui.texture.id()),
+                     ImVec2(imgW * ui.zoom, imgH * ui.zoom));
+
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+
+        // Pixel grid, once a texel is big enough for the line not to swamp it.
+        if (ui.zoom >= 8.0f) {
+            const ImU32 line = ImGui::GetColorU32(ImVec4(1, 1, 1, 0.18f));
+            const float x0 = std::max(topLeft.x, origin.x);
+            const float x1 = std::min(topLeft.x + imgW * ui.zoom, origin.x + size.x);
+            const float y0 = std::max(topLeft.y, origin.y);
+            const float y1 = std::min(topLeft.y + imgH * ui.zoom, origin.y + size.y);
+            const int firstX = static_cast<int>(std::max(0.0f, (origin.x - topLeft.x) / ui.zoom));
+            const int firstY = static_cast<int>(std::max(0.0f, (origin.y - topLeft.y) / ui.zoom));
+            for (int x = firstX; x <= ui.texture.width(); ++x) {
+                const float px = topLeft.x + static_cast<float>(x) * ui.zoom;
+                if (px > x1)
+                    break;
+                if (px >= x0)
+                    draw->AddLine(ImVec2(px, y0), ImVec2(px, y1), line);
+            }
+            for (int y = firstY; y <= ui.texture.height(); ++y) {
+                const float py = topLeft.y + static_cast<float>(y) * ui.zoom;
+                if (py > y1)
+                    break;
+                if (py >= y0)
+                    draw->AddLine(ImVec2(x0, py), ImVec2(x1, py), line);
+            }
+        }
+
+        if (hovered && surface) {
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            const int tx = static_cast<int>(std::floor((mouse.x - topLeft.x) / ui.zoom));
+            const int ty = static_cast<int>(std::floor((mouse.y - topLeft.y) / ui.zoom));
+            if (tx >= 0 && ty >= 0 && tx < surface->w && ty < surface->h) {
+                ui.hasHover = true;
+                ui.hoverX = tx;
+                ui.hoverY = ty;
+                const float* v = surface->at(tx, ty);
+                for (int c = 0; c < 4; ++c)
+                    ui.hoverValue[c] = v[c];
+            }
+        }
+    } else if (slot.decodeError) {
+        ImGui::PushStyleColor(ImGuiCol_Text, errorColor());
+        centeredHint(slot.decodeError->message.c_str());
+        ImGui::PopStyleColor();
+    } else {
+        centeredHint(slot.loaded() ? "Decoding..." : "No image loaded");
+    }
+
+    const float pad = ImGui::GetStyle().FramePadding.x + 2.0f;
+    std::string dims = kEmptyValue;
+    if (surface)
+        dims = dimsText(surface->w, surface->h);
+
     char overlay[128];
     std::snprintf(overlay, sizeof(overlay), "%s | mip %d | %s",
                   viewModeName(app.view.viewMode), app.view.level, dims.c_str());
-    ImGui::SetCursorScreenPos(ImVec2(pos.x + pad, pos.y + pad));
+    ImGui::SetCursorScreenPos(ImVec2(origin.x + pad, origin.y + pad));
     ImGui::TextDisabled("%s", overlay);
 
-    const char* zoom = "100%";
+    char zoom[32];
+    std::snprintf(zoom, sizeof(zoom), "%.0f%%", ui.zoom * 100.0f);
     const ImVec2 zoomSize = ImGui::CalcTextSize(zoom);
-    ImGui::SetCursorScreenPos(ImVec2(pos.x + size.x - zoomSize.x - pad,
-                                     pos.y + size.y - zoomSize.y - pad));
+    ImGui::SetCursorScreenPos(ImVec2(origin.x + size.x - zoomSize.x - pad,
+                                     origin.y + size.y - zoomSize.y - pad));
     ImGui::TextDisabled("%s", zoom);
 
     ImGui::EndChild();
@@ -361,13 +468,13 @@ void drawSourcesPanel(AppState& app) {
     ImGui::End();
 }
 
-void drawViewportPanel(AppState& app) {
+void drawViewportPanel(AppState& app, UiState& ui) {
     if (ImGui::Begin(kWinViewport)) {
         drawViewModeRow(app);
 
         const float controlRow = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y;
         const float body = ImGui::GetContentRegionAvail().y - controlRow;
-        drawViewportBody(app, body > 0.0f ? body : 0.0f);
+        drawViewportBody(app, ui, body > 0.0f ? body : 0.0f);
 
         drawControlRow(app);
     }

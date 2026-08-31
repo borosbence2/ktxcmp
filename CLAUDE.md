@@ -136,6 +136,15 @@ ambiguity in mode 2. Support this.
    sRGB flag comes with it; there is no DFD premultiplied-alpha flag to read, so that state
    is unknown rather than false. `FormatId` must be reachable from both, and anything the
    UI reports as "from the DFD" must say so only when a DFD actually exists.
+10. astc-encoder returns **NaN** for an undecodable ASTC block, by design, not a colour. Since
+    nothing in the decode path clamps, those NaNs reach the metric path and would silently
+    poison a mean. Every metric must exclude or report non-finite texels, and the viewer must
+    render them as a distinct colour rather than whatever the hardware makes of a NaN. BC and
+    uncompressed formats cannot produce this; ASTC can, from any corrupt payload.
+11. libktx's full build embeds its own copy of astc-encoder. Linking it alongside our
+    decoder-only build gives the linker two definitions of every internal astcenc symbol, and
+    it resolves them silently rather than erroring. Link `ktx_read` everywhere except the
+    fixture writer.
 
 ## Conventions
 

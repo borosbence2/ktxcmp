@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui/ImageTexture.hpp"
+
 #include <imgui.h>
 
 namespace ktxcmp {
@@ -7,6 +9,32 @@ class AppState;
 }
 
 namespace ktxcmp::ui {
+
+// UI-owned state that AppState has no business knowing about: a GL texture and
+// where the user has panned to. Constructed in main, passed by reference.
+struct UiState {
+    ImageTexture texture;
+
+    float zoom = 1.0f;
+    float panX = 0.0f;
+    float panY = 0.0f;
+    bool fitRequested = true;
+
+    // The fit follows the viewport until the user zooms or pans, then stops
+    // fighting them. Without this the first fit runs before the dock layout has
+    // settled and the image ends up cropped against a stale child size.
+    bool autoFit = true;
+    float fittedW = 0.0f;
+    float fittedH = 0.0f;
+    int fittedTexW = 0;
+    int fittedTexH = 0;
+
+    // Pixel inspector readout, filled by the viewport, read by the status bar.
+    bool hasHover = false;
+    int hoverX = 0;
+    int hoverY = 0;
+    float hoverValue[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+};
 
 // Dock window titles. The layout builder and the panels must agree on these.
 inline constexpr const char* kWinSources  = "Sources";
@@ -24,14 +52,14 @@ inline constexpr float kMipStripHeight = 112.0f;
 void applyTheme(float scale);
 
 // One frame of the entire UI.
-void drawFrame(AppState& app);
+void drawFrame(AppState& app, UiState& ui);
 
 // Panels. Each opens and closes its own dock window.
 void drawSourcesPanel(AppState& app);
-void drawViewportPanel(AppState& app);
+void drawViewportPanel(AppState& app, UiState& ui);
 void drawAnalysisPanel(AppState& app);
 void drawMipStripPanel(AppState& app);
-void drawStatusBar(AppState& app);
+void drawStatusBar(AppState& app, UiState& ui);
 
 // Shared panel vocabulary.
 ImVec4 accentColor();

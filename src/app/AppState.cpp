@@ -1,5 +1,7 @@
 #include "app/AppState.hpp"
 
+#include "decode/Decoder.hpp"
+
 #include <algorithm>
 #include <utility>
 
@@ -58,6 +60,40 @@ void AppState::loadIntoSlot(Slot which, const std::filesystem::path& path) {
     view.level = std::clamp(view.level, 0, info.levelCount - 1);
     view.layer = std::clamp(view.layer, 0, info.layerCount - 1);
     view.face  = std::clamp(view.face, 0, info.faceCount - 1);
+}
+
+void AppState::ensureDecoded(Slot which) {
+    SlotState& target = slot(which);
+    if (!target.loaded())
+        return;
+
+    const KtxInfo& info = target.ktx->info();
+    const int level = std::clamp(view.level, 0, info.levelCount - 1);
+    const int layer = std::clamp(view.layer, 0, info.layerCount - 1);
+    const int face = std::clamp(view.face, 0, info.faceCount - 1);
+
+    if (target.surface && target.surfaceLevel == level && target.surfaceLayer == layer &&
+        target.surfaceFace == face)
+        return;
+
+    target.dropSurface();
+    target.surfaceLevel = level;
+    target.surfaceLayer = layer;
+    target.surfaceFace = face;
+
+    auto bytes = target.ktx->levelBytes(level, layer, face);
+    if (!bytes) {
+        target.decodeError = bytes.error();
+        return;
+    }
+    const LevelInfo& li = info.levels[static_cast<std::size_t>(level)];
+    auto decoded = decode(info.format, *bytes, li.w, li.h, li.d);
+    if (!decoded) {
+        target.decodeError = decoded.error();
+        return;
+    }
+    target.surface = std::move(*decoded);
+    target.surface->premultiplied = info.premultiplied.value_or(false);
 }
 
 }  // namespace ktxcmp

@@ -112,7 +112,7 @@ void endCard() {
     ImGui::EndChild();
 }
 
-void drawStatusBar(AppState& app) {
+void drawStatusBar(AppState& app, UiState& ui) {
     (void)app;
     ImGuiViewport* vp = ImGui::GetMainViewport();
     const float height = ImGui::GetFrameHeight();
@@ -120,15 +120,30 @@ void drawStatusBar(AppState& app) {
     if (ImGui::BeginViewportSideBar("##ktxcmp.statusbar", vp, ImGuiDir_Down, height,
                                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_MenuBar)) {
         if (ImGui::BeginMenuBar()) {
-            // Pixel inspector. Format-aware from M6; ints for now, nothing to show.
+            // Pixel inspector. Becomes format-aware at M6; 8-bit ints plus the
+            // underlying float is the honest readout for an LDR surface.
             ImGui::TextDisabled("xy");
             ImGui::SameLine();
-            ImGui::TextUnformatted(kEmptyValue);
+            if (ui.hasHover) {
+                ImGui::Text("%d, %d", ui.hoverX, ui.hoverY);
+            } else {
+                ImGui::TextUnformatted(kEmptyValue);
+            }
 
             ImGui::SameLine(0.0f, 18.0f);
             ImGui::TextDisabled("A");
             ImGui::SameLine();
-            ImGui::TextUnformatted(kEmptyValue);
+            if (ui.hasHover) {
+                ImGui::Text("%3d %3d %3d %3d", static_cast<int>(ui.hoverValue[0] * 255.0f + 0.5f),
+                            static_cast<int>(ui.hoverValue[1] * 255.0f + 0.5f),
+                            static_cast<int>(ui.hoverValue[2] * 255.0f + 0.5f),
+                            static_cast<int>(ui.hoverValue[3] * 255.0f + 0.5f));
+                ImGui::SameLine(0.0f, 10.0f);
+                ImGui::TextDisabled("(%.4f %.4f %.4f %.4f)", ui.hoverValue[0], ui.hoverValue[1],
+                                    ui.hoverValue[2], ui.hoverValue[3]);
+            } else {
+                ImGui::TextUnformatted(kEmptyValue);
+            }
 
             ImGui::SameLine(0.0f, 18.0f);
             ImGui::TextDisabled("B");
@@ -146,9 +161,48 @@ void drawStatusBar(AppState& app) {
     ImGui::End();
 }
 
-void drawFrame(AppState& app) {
+// PLAN.md, Keyboard. Skipped while a widget has focus so typing never triggers
+// a view change.
+void handleShortcuts(AppState& app, UiState& ui) {
+    if (ImGui::IsAnyItemActive())
+        return;
+    ViewState& v = app.view;
+
+    const bool ctrl = ImGui::GetIO().KeyCtrl;
+    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_1, false)) {
+        ui.zoom = 1.0f;
+        return;
+    }
+    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_O, false)) {
+        app.openDialogRequested = true;
+        return;
+    }
+    if (ctrl)
+        return;
+
+    // Isolate one channel, or 0 for all three.
+    if (ImGui::IsKeyPressed(ImGuiKey_1, false)) v.channels = {true, false, false, false};
+    if (ImGui::IsKeyPressed(ImGuiKey_2, false)) v.channels = {false, true, false, false};
+    if (ImGui::IsKeyPressed(ImGuiKey_3, false)) v.channels = {false, false, true, false};
+    if (ImGui::IsKeyPressed(ImGuiKey_4, false)) v.channels = {false, false, false, true};
+    if (ImGui::IsKeyPressed(ImGuiKey_0, false)) v.channels = {true, true, true, false};
+
+    if (ImGui::IsKeyPressed(ImGuiKey_F, false))
+        ui.fitRequested = true;
+
+    if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, true) && v.level > 0)
+        --v.level;
+    if (ImGui::IsKeyPressed(ImGuiKey_RightBracket, true))
+        ++v.level;  // clamped against the file in ensureDecoded
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Space, false))
+        v.viewMode = v.viewMode == ViewMode::A ? ViewMode::B : ViewMode::A;
+}
+
+void drawFrame(AppState& app, UiState& ui) {
+    handleShortcuts(app, ui);
     drawMenuBar(app);
-    drawStatusBar(app);
+    drawStatusBar(app, ui);
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     const ImGuiID rootId = dockspaceId();
@@ -162,7 +216,7 @@ void drawFrame(AppState& app) {
     ImGui::DockSpaceOverViewport(rootId, vp, ImGuiDockNodeFlags_None);
 
     drawSourcesPanel(app);
-    drawViewportPanel(app);
+    drawViewportPanel(app, ui);
     drawAnalysisPanel(app);
     drawMipStripPanel(app);
 }

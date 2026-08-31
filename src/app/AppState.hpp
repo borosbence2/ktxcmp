@@ -5,6 +5,7 @@
 
 #include "container/KtxFile.hpp"
 #include "core/Error.hpp"
+#include "core/Surface.hpp"
 
 #include <filesystem>
 #include <mutex>
@@ -59,12 +60,26 @@ struct SlotState {
     std::optional<KtxFile> ktx;
     std::optional<Error> error;
 
+    // The decoded subresource currently on screen. M3 replaces this with an LRU
+    // cache and a worker pool; for now one level is decoded on demand.
+    std::optional<Surface> surface;
+    int surfaceLevel = -1;
+    int surfaceLayer = -1;
+    int surfaceFace = -1;
+    std::optional<Error> decodeError;
+
     [[nodiscard]] bool loaded() const { return ktx.has_value(); }
     [[nodiscard]] bool failed() const { return error.has_value(); }
     void clear() {
         path.clear();
         ktx.reset();
         error.reset();
+        dropSurface();
+    }
+    void dropSurface() {
+        surface.reset();
+        surfaceLevel = surfaceLayer = surfaceFace = -1;
+        decodeError.reset();
     }
 };
 
@@ -88,6 +103,9 @@ public:
     void processPendingOpens();
 
     void loadIntoSlot(Slot slot, const std::filesystem::path& path);
+
+    // Decodes the selected subresource if it is not already the one held.
+    void ensureDecoded(Slot slot);
 
     [[nodiscard]] SlotState& slot(Slot which) { return which == Slot::A ? slotA : slotB; }
     [[nodiscard]] const SlotState& slot(Slot which) const {
