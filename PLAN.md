@@ -22,11 +22,16 @@ Done when: window opens on both targets, panels dock and persist via `imgui.ini`
 
 ## M1 — Container layer
 
-- libktx wrapper: open `.ktx2`, read header and DFD
+- libktx wrapper: open `.ktx2` and `.ktx`, read header and, when present, DFD
+- File input: `File > Open` via SDL3's native dialog plus `SDL_EVENT_DROP_FILE`; neither
+  costs a dependency. Drop routes to slot A until slot B means something at M4
 - `VkFormat` -> `FormatId { family, blockW, blockH, bytesPerBlock, channels, transferFn, signed }`
   for the supported subset only (ASTC LDR/sRGB block sizes, BC5 UNORM/SNORM, BC7 UNORM/sRGB,
   uncompressed RGBA8/RGBA16)
-- Read premultiplied-alpha and sRGB flags from the DFD
+- `glInternalFormat` -> the same `FormatId`, for KTX1. Both container versions converge on one
+  format identity; nothing above the container layer branches on which file it came from
+- Read premultiplied-alpha and sRGB flags from the DFD. KTX1 has no DFD: sRGB comes from the
+  GL internal format and premultiplied alpha is unknown, which is not the same as false
 - Expose level/layer/face counts and per-level byte ranges
 - Assert level dimensions against `max(1, base >> level)` independently of libktx
 - Reject unsupported formats with a clear message naming the format
@@ -34,7 +39,8 @@ Done when: window opens on both targets, panels dock and persist via `imgui.ini`
 No pixels yet. The metadata panel shows format, dimensions, level count, supercompression scheme,
 DFD flags, byte size.
 
-Done when: a real ASTC and a real BC7 `.ktx2` both report correct metadata.
+Done when: the ASTC 6x6 sRGB and BC7 sRGB files in `testfiles/` both report correct metadata,
+and a `.ktx2` does too.
 
 ---
 
@@ -127,7 +133,7 @@ RG override produces PSNR instead.
 ## M8 — Packaging
 
 - Windows: MSVC x64, `/MT`, portable `.exe`, optional Inno Setup installer
-- macOS: `.app` bundle, `Info.plist` declaring `.ktx2` and `.png` document types for Finder
+- macOS: `.app` bundle, `Info.plist` declaring `.ktx2`, `.ktx` and `.png` document types for Finder
   drag-drop and Open With, `CMAKE_OSX_ARCHITECTURES=arm64`
 - Codesign and notarize the macOS build. Budget real time for this; it is a first-time rabbit hole
 - CI publishes both artifacts per tag

@@ -7,6 +7,7 @@ with emphasis on mipmap chain analysis. Similar in spirit to PVRTexToolGUI, narr
 
 **In scope**
 - KTX2 container reading (`.ktx2`)
+- KTX1 container reading (`.ktx`), read-only, same supported format subset
 - Formats: ASTC (LDR + sRGB, all 2D block sizes), BC5 (UNORM + SNORM), BC7, uncompressed RGBA8/RGBA16
 - Supercompression: Zstd, ZLIB, UASTC transcode
 - PNG as reference image (8-bit and 16-bit)
@@ -17,10 +18,9 @@ with emphasis on mipmap chain analysis. Similar in spirit to PVRTexToolGUI, narr
 - Encoding or compression of any kind
 - Format conversion, file writing
 - BC1–BC4, BC6H, ETC/EAC, PVRTC, Basis ETC1S
-- KTX1 (`.ktx`)
 - Batch CLI, network features, telemetry
 
-Deferred, plausible later: DDS reading, KTX1, BC6H + HDR pipeline.
+Deferred, plausible later: DDS reading, BC6H + HDR pipeline.
 
 ## Stack
 
@@ -36,7 +36,7 @@ gratuitously non-portable code.
 
 | Purpose | Library | Integration |
 |---|---|---|
-| KTX2 container, DFD, supercompression, UASTC transcode | KTX-Software (libktx) | submodule or vcpkg; disable tools/tests/docs targets |
+| KTX2 + KTX1 container, DFD, supercompression, UASTC transcode | KTX-Software (libktx) | submodule or vcpkg; disable tools/tests/docs targets |
 | BC5 + BC7 block decode | `bcdec.h` | vendored single header |
 | ASTC block decode | ARM astc-encoder (`astcenc_decompress`) | submodule; decoder-only build if possible |
 | PNG load | `stb_image.h` (or lodepng if 16-bit handling proves fiddly) | vendored |
@@ -132,6 +132,10 @@ ambiguity in mode 2. Support this.
 6. Premultiplied alpha (from the DFD) not surfaced: produces invalid comparisons silently.
 7. Normal-map reference downsampling without renormalisation.
 8. macOS notarization left until the end.
+9. KTX1 has no DFD. Format identity comes from `glInternalFormat`, not `VkFormat`, and the
+   sRGB flag comes with it; there is no DFD premultiplied-alpha flag to read, so that state
+   is unknown rather than false. `FormatId` must be reachable from both, and anything the
+   UI reports as "from the DFD" must say so only when a DFD actually exists.
 
 ## Conventions
 

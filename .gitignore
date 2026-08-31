@@ -21,3 +21,8 @@ imgui.ini
 # OS
 .DS_Store
 Thumbs.db
+
+# Test textures. Not committed: the repo is public and these are binary assets
+# of unstated provenance. See PLAN.md's test corpus section for what a
+# committable corpus should be.
+/testfiles/

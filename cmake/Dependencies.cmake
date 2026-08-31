@@ -4,7 +4,7 @@
 #   SDL3           window + input                    fetched, static
 #   Dear ImGui     GUI (docking branch)              fetched, built by third_party/imgui
 #   astc-encoder   ASTC block decode                 fetched, decompressor only
-#   libktx         KTX2 container / DFD / transcode  fetched, static
+#   libktx         KTX2 + KTX1 container / DFD       fetched, static
 #   bcdec.h        BC5 + BC7 block decode            vendored, third_party/bcdec
 #   stb_image.h    PNG load                          vendored, third_party/stb
 #
@@ -115,7 +115,7 @@ block(SCOPE_FOR VARIABLES)
     set(KTX_FEATURE_PY             OFF)
     set(KTX_FEATURE_LOADTEST_APPS  OFF)
     set(KTX_FEATURE_STATIC_LIBRARY ON)
-    set(KTX_FEATURE_KTX1           OFF)  # scope: .ktx2 only
+    set(KTX_FEATURE_KTX1           ON)   # .ktx read support, added 2026-08-31
     set(KTX_FEATURE_KTX2           ON)
     set(KTX_FEATURE_GL_UPLOAD      OFF)  # we decode on the CPU, not upload
     set(KTX_FEATURE_VK_UPLOAD      OFF)

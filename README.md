@@ -41,7 +41,7 @@ by CLAUDE.md and is not extended without asking.
 | Window + input | SDL3 | `release-3.4.14` | fetched, static |
 | GUI | Dear ImGui (docking) | `v1.92.9b-docking` | fetched, built by `third_party/imgui` |
 | ASTC block decode | ARM astc-encoder | `5.7.0` | fetched, decompressor only |
-| KTX2 container, DFD, supercompression | KTX-Software | `v4.4.2` | fetched, static |
+| KTX2 + KTX1 container, DFD, supercompression | KTX-Software | `v4.4.2` | fetched, static |
 | BC5 + BC7 block decode | `bcdec.h` | v0.97 | vendored |
 | PNG load | `stb_image.h` | v2.30 | vendored |
 
