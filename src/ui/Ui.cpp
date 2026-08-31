@@ -168,7 +168,12 @@ void drawStatusBar(AppState& app, UiState& ui) {
             ImGui::SameLine(0.0f, 18.0f);
             ImGui::TextDisabled("A");
             ImGui::SameLine();
-            if (ui.hasHover) {
+            if (!ui.hasHover) {
+                ImGui::TextUnformatted(kEmptyValue);
+            } else if (ui.hoverNormalMode) {
+                ImGui::Text("n %+.3f %+.3f %+.3f", ui.hoverNormalA[0], ui.hoverNormalA[1],
+                            ui.hoverNormalA[2]);
+            } else {
                 ImGui::Text("%3d %3d %3d %3d", static_cast<int>(ui.hoverValue[0] * 255.0f + 0.5f),
                             static_cast<int>(ui.hoverValue[1] * 255.0f + 0.5f),
                             static_cast<int>(ui.hoverValue[2] * 255.0f + 0.5f),
@@ -176,34 +181,37 @@ void drawStatusBar(AppState& app, UiState& ui) {
                 ImGui::SameLine(0.0f, 10.0f);
                 ImGui::TextDisabled("(%.4f %.4f %.4f %.4f)", ui.hoverValue[0], ui.hoverValue[1],
                                     ui.hoverValue[2], ui.hoverValue[3]);
-            } else {
-                ImGui::TextUnformatted(kEmptyValue);
             }
 
             ImGui::SameLine(0.0f, 18.0f);
             ImGui::TextDisabled("B");
             ImGui::SameLine();
-            if (ui.hasHoverB) {
+            if (!ui.hasHoverB) {
+                ImGui::TextUnformatted(kEmptyValue);
+            } else if (ui.hoverNormalMode) {
+                ImGui::Text("n %+.3f %+.3f %+.3f", ui.hoverNormalB[0], ui.hoverNormalB[1],
+                            ui.hoverNormalB[2]);
+            } else {
                 ImGui::Text("%3d %3d %3d %3d", static_cast<int>(ui.hoverValueB[0] * 255.0f + 0.5f),
                             static_cast<int>(ui.hoverValueB[1] * 255.0f + 0.5f),
                             static_cast<int>(ui.hoverValueB[2] * 255.0f + 0.5f),
                             static_cast<int>(ui.hoverValueB[3] * 255.0f + 0.5f));
-            } else {
-                ImGui::TextUnformatted(kEmptyValue);
             }
 
             ImGui::SameLine(0.0f, 18.0f);
-            ImGui::TextDisabled("delta");
+            ImGui::TextDisabled(ui.hoverNormalMode ? "angle" : "delta");
             ImGui::SameLine();
-            if (ui.hasHover && ui.hasHoverB) {
-                // Signed, and in the same 0-255 units the metrics use.
+            if (!ui.hasHover || !ui.hasHoverB) {
+                ImGui::TextUnformatted(kEmptyValue);
+            } else if (ui.hoverNormalMode) {
+                ImGui::Text("%.3f deg", static_cast<double>(ui.hoverAngleDeg));
+            } else {
+                // Signed, in the same 0-255 units the metrics use.
                 ImGui::Text("%+.1f %+.1f %+.1f %+.1f",
                             (ui.hoverValue[0] - ui.hoverValueB[0]) * 255.0f,
                             (ui.hoverValue[1] - ui.hoverValueB[1]) * 255.0f,
                             (ui.hoverValue[2] - ui.hoverValueB[2]) * 255.0f,
                             (ui.hoverValue[3] - ui.hoverValueB[3]) * 255.0f);
-            } else {
-                ImGui::TextUnformatted(kEmptyValue);
             }
 
             ImGui::EndMenuBar();

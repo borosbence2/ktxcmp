@@ -21,7 +21,8 @@ CompareService::~CompareService() {
         m_thread.join();
 }
 
-void CompareService::request(std::uint64_t token, SurfacePtr a, SurfacePtr b, bool linearLight) {
+void CompareService::request(std::uint64_t token, SurfacePtr a, SurfacePtr b,
+                             bool linearLight, bool normalMode, bool isSigned) {
     if (!a || !b)
         return;
     {
@@ -37,11 +38,13 @@ void CompareService::request(std::uint64_t token, SurfacePtr a, SurfacePtr b, bo
         m_pendingA = std::move(a);
         m_pendingB = std::move(b);
         m_pendingLinear = linearLight;
+        m_pendingNormal = normalMode;
+        m_pendingSigned = isSigned;
     }
     m_wake.notify_one();
 }
 
-std::optional<Result<CompareResult>> CompareService::result(std::uint64_t token) const {
+std::optional<Result<MetricsResult>> CompareService::result(std::uint64_t token) const {
     const std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_done.has_value() || m_doneToken != token)
         return std::nullopt;
@@ -56,7 +59,7 @@ bool CompareService::pending(std::uint64_t token) const {
 void CompareService::workerLoop() {
     for (;;) {
         SurfacePtr a, b;
-        bool linear = false;
+        bool linear = false, normalMode = false, isSigned = false;
         std::uint64_t token = 0;
         {
             std::unique_lock<std::mutex> lock(m_mutex);
@@ -67,12 +70,34 @@ void CompareService::workerLoop() {
             a = std::move(m_pendingA);
             b = std::move(m_pendingB);
             linear = m_pendingLinear;
+            normalMode = m_pendingNormal;
+            isSigned = m_pendingSigned;
             m_hasPending = false;
             m_running = true;
             m_runningToken = token;
         }
 
-        Result<CompareResult> computed = compare(*a, *b, linear);
+        Result<MetricsResult> computed = [&]() -> Result<MetricsResult> {
+            if (normalMode) {
+                // Both sides are remapped the same way before anything is
+                // measured; the reference is not assumed to be already unit.
+                const NormalField test = reconstructNormals(*a, isSigned);
+                const NormalField reference = reconstructNormals(*b, isSigned);
+                auto metrics = compareNormals(test, reference);
+                if (!metrics)
+                    return std::unexpected(metrics.error());
+                MetricsResult out;
+                out.normalMode = true;
+                out.normal = *metrics;
+                return out;
+            }
+            auto metrics = compare(*a, *b, linear);
+            if (!metrics)
+                return std::unexpected(metrics.error());
+            MetricsResult out;
+            out.colour = *metrics;
+            return out;
+        }();
 
         {
             const std::lock_guard<std::mutex> lock(m_mutex);

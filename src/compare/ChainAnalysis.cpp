@@ -63,6 +63,38 @@ int expectedLevelCount(int w, int h) {
     return levels;
 }
 
+// Compares one level against whatever it should be, in whichever metric family
+// applies. Resampling a normal map shortens its vectors, so in normal mode the
+// resampled side is renormalised before any angle is taken (trap 7).
+void measureAgainst(const Surface& level, const Surface& expected, const ChainInput& input,
+                    LevelStats& stats) {
+    if (input.normalMode) {
+        auto unit = renormaliseNormals(expected, input.isSigned);
+        if (!unit) {
+            stats.note = unit.error().message;
+            return;
+        }
+        const NormalField a = reconstructNormals(level, input.isSigned);
+        const NormalField b = reconstructNormals(*unit, input.isSigned);
+        auto metrics = compareNormals(a, b);
+        if (metrics) {
+            stats.normal = *metrics;
+            stats.hasNormalMetrics = true;
+        } else {
+            stats.note = metrics.error().message;
+        }
+        return;
+    }
+
+    auto metrics = compare(level, expected, input.metricLinearLight);
+    if (metrics) {
+        stats.metrics = *metrics;
+        stats.hasMetrics = true;
+    } else {
+        stats.note = metrics.error().message;
+    }
+}
+
 std::string fixed(double v, int places) {
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%.*f", places, v);
@@ -88,6 +120,7 @@ Result<ChainReport> analyseChain(const ChainInput& input) {
     report.filter = input.filter;
     report.resampleLinearLight = input.resampleLinearLight;
     report.metricLinearLight = input.metricLinearLight;
+    report.normalMode = input.normalMode;
     report.baseWidth = input.levels.front()->w;
     report.baseHeight = input.levels.front()->h;
     report.expectedLevels = expectedLevelCount(report.baseWidth, report.baseHeight);
@@ -118,13 +151,7 @@ Result<ChainReport> analyseChain(const ChainInput& input) {
             } else if (resized->tf != s.tf) {
                 stats.note = "reference and texture are in different transfer functions";
             } else {
-                auto metrics = compare(s, *resized, input.metricLinearLight);
-                if (metrics) {
-                    stats.metrics = *metrics;
-                    stats.hasMetrics = true;
-                } else {
-                    stats.note = metrics.error().message;
-                }
+                measureAgainst(s, *resized, input, stats);
             }
         } else {  // SelfConsistency
             if (level == 0) {
@@ -136,13 +163,7 @@ Result<ChainReport> analyseChain(const ChainInput& input) {
                 if (!halved) {
                     stats.note = halved.error().message;
                 } else {
-                    auto metrics = compare(s, *halved, input.metricLinearLight);
-                    if (metrics) {
-                        stats.metrics = *metrics;
-                        stats.hasMetrics = true;
-                    } else {
-                        stats.note = metrics.error().message;
-                    }
+                    measureAgainst(s, *halved, input, stats);
                 }
             }
         }
@@ -206,7 +227,17 @@ std::string toCsv(const ChainReport& report, const std::string& pathA, const std
 
     for (const LevelStats& s : report.levels) {
         out << s.level << ',' << s.w << ',' << s.h << ',';
-        if (s.hasMetrics) {
+        if (report.normalMode) {
+            if (s.hasNormalMetrics) {
+                const NormalMetrics& n = s.normal;
+                out << fixed(n.meanAngleDeg, 6) << ',' << fixed(n.medianAngleDeg, 6) << ','
+                    << fixed(n.p95AngleDeg, 6) << ',' << fixed(n.maxAngleDeg, 6) << ','
+                    << n.maxAngleX << ',' << n.maxAngleY << ','
+                    << fixed(n.meanLengthDeviation, 6) << ',';
+            } else {
+                out << ",,,,,,,";
+            }
+        } else if (s.hasMetrics) {
             const CompareResult& m = s.metrics;
             out << (std::isinf(m.rgb.psnr) ? "inf" : fixed(m.rgb.psnr, 4)) << ','
                 << fixed(m.rgb.rmse, 6) << ',' << fixed(m.ssim, 6) << ','
@@ -216,7 +247,9 @@ std::string toCsv(const ChainReport& report, const std::string& pathA, const std
             out << ",,,,,,,";
         }
         out << fixed(s.meanLuma, 4) << ',' << fixed(s.alphaCoverage, 6) << ','
-            << (s.hasMetrics ? s.metrics.excludedNonFinite : s.nonFinite) << ',';
+            << (report.normalMode ? (s.hasNormalMetrics ? s.normal.excludedNonFinite : s.nonFinite)
+                                  : (s.hasMetrics ? s.metrics.excludedNonFinite : s.nonFinite))
+            << ',';
         // Notes are free text, so they are quoted and any quote is doubled.
         std::string note = s.note;
         std::string escaped;

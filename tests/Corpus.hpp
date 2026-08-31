@@ -60,6 +60,15 @@ inline constexpr const char* kGammaMipsFixture = "gamma_mips_checker_64.ktx2";
 inline constexpr const char* kLinearMipsFixture = "linear_mips_checker_64.ktx2";
 inline constexpr int kCheckerSize = 64;
 
+// A BC5 normal map whose source field is known exactly, so angular error can be
+// checked rather than eyeballed (PLAN.md M6).
+inline constexpr const char* kBc5NormalFixture = "normal_bc5_64.ktx2";
+inline constexpr int kNormalSize = 64;
+
+// Bc5Encoder.cpp.
+[[nodiscard]] std::vector<float> normalFieldXyz(int w, int h);
+[[nodiscard]] std::vector<std::uint8_t> encodeBc5Normals(int w, int h);
+
 // The 16-bit fixture stores values that collide if either byte is dropped, so a
 // truncating loader cannot pass (CLAUDE.md, trap 5).
 [[nodiscard]] std::vector<std::uint16_t> gradient16(int w, int h);

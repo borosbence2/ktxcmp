@@ -54,6 +54,13 @@ struct UiState {
     float hoverValue[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     bool hasHoverB = false;
     float hoverValueB[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+    // In normal-map mode the inspector reports directions and an angle between
+    // them, not 8-bit colour values (PLAN.md M6).
+    bool hoverNormalMode = false;
+    float hoverNormalA[3] = {0.0f, 0.0f, 0.0f};
+    float hoverNormalB[3] = {0.0f, 0.0f, 0.0f};
+    float hoverAngleDeg = 0.0f;
 };
 
 // Dock window titles. The layout builder and the panels must agree on these.

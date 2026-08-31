@@ -44,6 +44,7 @@ add_executable(ktxcmp
     src/compare/ChainService.cpp
     src/compare/CompareEngine.cpp
     src/compare/CompareService.cpp
+    src/compare/NormalMap.cpp
     src/compare/Resampler.cpp
     src/decode/Decoder.cpp
     src/decode/DecodeService.cpp
@@ -117,6 +118,7 @@ set(KTXCMP_LAYER_SOURCES
     src/compare/ChainService.cpp
     src/compare/CompareEngine.cpp
     src/compare/CompareService.cpp
+    src/compare/NormalMap.cpp
     src/compare/Resampler.cpp
     src/decode/Decoder.cpp
     src/decode/DecodeService.cpp
@@ -126,7 +128,8 @@ add_executable(make_fixtures
     tests/make_fixtures.cpp
     tests/CorpusSpec.cpp
     tests/CorpusWriter.cpp
-    tests/PngWriter.cpp)
+    tests/PngWriter.cpp
+    tests/Bc5Encoder.cpp)
 target_include_directories(make_fixtures PRIVATE src tests)
 target_compile_features(make_fixtures PRIVATE cxx_std_23)
 target_link_libraries(make_fixtures PRIVATE ktx)
@@ -177,7 +180,16 @@ target_include_directories(chain_test PRIVATE src tests third_party/bcdec third_
 target_compile_features(chain_test PRIVATE cxx_std_23)
 target_link_libraries(chain_test PRIVATE ktx_read ${KTXCMP_ASTCDEC_TARGET})
 
-foreach(t make_fixtures container_test decode_test cache_test compare_test resample_test chain_test)
+add_executable(normal_test
+    tests/normal_test.cpp
+    tests/CorpusSpec.cpp
+    tests/Bc5Encoder.cpp
+    ${KTXCMP_LAYER_SOURCES})
+target_include_directories(normal_test PRIVATE src tests third_party/bcdec third_party/stb)
+target_compile_features(normal_test PRIVATE cxx_std_23)
+target_link_libraries(normal_test PRIVATE ktx_read ${KTXCMP_ASTCDEC_TARGET})
+
+foreach(t make_fixtures container_test decode_test cache_test compare_test resample_test chain_test normal_test)
     if(MSVC)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
     else()
@@ -195,7 +207,8 @@ add_test(NAME decode COMMAND decode_test "${KTXCMP_FIXTURE_DIR}")
 add_test(NAME cache COMMAND cache_test)
 add_test(NAME resample COMMAND resample_test)
 add_test(NAME chain COMMAND chain_test "${KTXCMP_FIXTURE_DIR}")
-set_tests_properties(chain PROPERTIES FIXTURES_REQUIRED corpus)
+add_test(NAME normal COMMAND normal_test "${KTXCMP_FIXTURE_DIR}")
+set_tests_properties(chain normal PROPERTIES FIXTURES_REQUIRED corpus)
 add_test(NAME compare COMMAND compare_test "${KTXCMP_FIXTURE_DIR}")
 set_tests_properties(compare PROPERTIES FIXTURES_REQUIRED corpus)
 set_tests_properties(container decode PROPERTIES FIXTURES_REQUIRED corpus)

@@ -59,6 +59,9 @@ struct ViewState {
     //     sRGB-encoded values and requires the toggle to be labelled.
     bool resampleLinearLight = true;
     bool metricLinearLight = false;
+
+    // BC5 is read as a normal map unless this is set (PLAN.md M6).
+    bool rawRgOverride = false;
 };
 
 // One loaded file, or one failed attempt at loading a file. A failure keeps its

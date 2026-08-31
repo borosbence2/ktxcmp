@@ -8,19 +8,25 @@ and [PLAN.md](PLAN.md) for the milestone order and the UI specification.
 
 ## Status
 
-**M5 — chain comparison.** All three compare modes. Mode 1 is KTX mip 0
-against a PNG reference with no resampling; mode 2 downsamples the reference to
-each level; mode 3 halves level N-1 and compares it to level N, needing no
-reference at all. Reports PSNR-RGB, RMSE, SSIM and max error with its
-coordinate, alpha always separate, plus an error-by-level plot you can click to
-select a level, warning badges on the mip strip, and CSV export.
+**M6 — normal-map mode.** All three compare modes, plus BC5 normal-map
+interpretation. BC5 is read as a normal map by default: z is reconstructed as
+sqrt(max(0, 1 - x^2 - y^2)), both sides are remapped the same way, and the
+metrics change wholesale to mean, median, p95 and max angular error in degrees
+with the deviation of |n| from 1. PSNR is not reported for a normal map at all.
+The format banner states the detection and offers a raw RG override, which puts
+the colour metrics back. The pixel inspector follows: directions and an angle,
+not 8-bit ints.
+
+Mode 1 is KTX mip 0 against a PNG reference with no resampling; mode 2
+downsamples the reference to each level; mode 3 halves level N-1 and compares it
+to level N, needing no reference. Error-by-level plot you can click to select a
+level, warning badges on the mip strip, level table, and CSV export whose header
+carries mode, filter, both linear-light flags and normal-map mode.
 
 Five resampling filters (box, triangle, Kaiser, Lanczos3, Mitchell). Two
 linear-light toggles with deliberately opposite defaults: resampling in linear
-light is **on**, because that is the correct way to downsample colour; the
-linear-light *metric* is **off**, because CLAUDE.md defines PSNR on sRGB-encoded
-values. Both travel with every table and export, because a mode 2 number without
-them is not interpretable.
+light is **on**, the linear-light *metric* is **off**. Resampled normal maps are
+renormalised before any angle is measured.
 
 Chain validation flags truncated chains, wrong level dimensions, constant or
 black levels, NaN and Inf, and alpha-coverage drift.

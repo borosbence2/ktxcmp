@@ -8,6 +8,7 @@
 #include "app/AppState.hpp"
 #include "compare/ChainAnalysis.hpp"
 #include "compare/CompareEngine.hpp"
+#include "compare/NormalMap.hpp"
 #include "container/KtxFile.hpp"
 
 #include <imgui.h>
@@ -22,6 +23,9 @@
 
 namespace ktxcmp::ui {
 namespace {
+
+// Defined with the metrics panel; the viewport needs it for the inspector.
+bool normalModeActive(const AppState& app);
 
 const char* viewModeName(ViewMode m) {
     switch (m) {
@@ -359,6 +363,7 @@ void drawViewportBody(AppState& app, UiState& ui, float height) {
 
     ui.hasHover = false;
     ui.hasHoverB = false;
+    ui.hoverNormalMode = false;
     if (haveImage) {
         const ImVec2 topLeft(origin.x + ui.panX, origin.y + ui.panY);
         ImGui::SetCursorScreenPos(topLeft);
@@ -410,6 +415,33 @@ void drawViewportBody(AppState& app, UiState& ui, float height) {
                     for (int c = 0; c < 4; ++c)
                         ui.hoverValueB[c] = vb[c];
                     ui.hasHoverB = true;
+                }
+
+                // In normal-map mode the readout is directions and the angle
+                // between them; 8-bit ints would be meaningless here.
+                ui.hoverNormalMode = normalModeActive(app);
+                if (ui.hoverNormalMode) {
+                    const bool isSigned = app.slotA.ktx->info().format.isSigned;
+                    auto unpackNormal = [isSigned](const float* p, float out[3]) {
+                        const double x = isSigned ? p[0] : (2.0 * p[0] - 1.0);
+                        const double y = isSigned ? p[1] : (2.0 * p[1] - 1.0);
+                        const double z = std::sqrt(std::max(0.0, 1.0 - x * x - y * y));
+                        const double len = std::sqrt(x * x + y * y + z * z);
+                        const double inv = len > 0.0 ? 1.0 / len : 0.0;
+                        out[0] = static_cast<float>(x * inv);
+                        out[1] = static_cast<float>(y * inv);
+                        out[2] = static_cast<float>(z * inv);
+                    };
+                    unpackNormal(v, ui.hoverNormalA);
+                    if (ui.hasHoverB) {
+                        unpackNormal(reference->at(tx, ty), ui.hoverNormalB);
+                        const double dot = std::clamp(
+                            static_cast<double>(ui.hoverNormalA[0]) * ui.hoverNormalB[0] +
+                                static_cast<double>(ui.hoverNormalA[1]) * ui.hoverNormalB[1] +
+                                static_cast<double>(ui.hoverNormalA[2]) * ui.hoverNormalB[2],
+                            -1.0, 1.0);
+                        ui.hoverAngleDeg = static_cast<float>(std::acos(dot) * 57.29577951308232);
+                    }
                 }
             }
         }
@@ -507,20 +539,36 @@ void drawControlRow(AppState& app) {
 
 // ------------------------------------------------------------- analysis ----
 
-void drawFormatBanner(const AppState& app) {
+void drawFormatBanner(AppState& app) {
     // Accent, not warning: successful auto-detection is normal operation.
     const ImVec4 accent = accentColor();
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(accent.x, accent.y, accent.z, 0.22f));
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(accent.x, accent.y, accent.z, 0.70f));
     if (beginCard("##formatBanner")) {
-        // Wrapped, not clipped: real format strings are longer than the rail.
         if (app.slotA.loaded()) {
             const KtxInfo& info = app.slotA.ktx->info();
             ImGui::TextWrapped("%s", info.formatName.c_str());
+
+            const bool detectable = looksLikeNormalMap(info.format);
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
-            ImGui::TextWrapped("%s, %s", info.version == ContainerVersion::Ktx1 ? "KTX1" : "KTX2",
-                               info.hasDfd ? "DFD present" : "no DFD");
+            if (detectable && !app.view.rawRgOverride)
+                ImGui::TextWrapped("normal map, z reconstructed");
+            else if (detectable)
+                ImGui::TextWrapped("raw RG (override)");
+            else
+                ImGui::TextWrapped("%s, %s", info.version == ContainerVersion::Ktx1 ? "KTX1" : "KTX2",
+                                   info.hasDfd ? "DFD present" : "no DFD");
             ImGui::PopStyleColor();
+
+            // The override only means anything where a detection was made.
+            if (detectable) {
+                bool raw = app.view.rawRgOverride;
+                if (ImGui::Checkbox("raw RG", &raw))
+                    app.view.rawRgOverride = raw;
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Read the two channels as plain data instead of a normal "
+                                      "map. Reports PSNR rather than angular error.");
+            }
         } else {
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
             ImGui::TextWrapped("no file");
@@ -554,20 +602,37 @@ void drawCompareControls(AppState& app) {
     ImGui::Checkbox("Linear light", &v.resampleLinearLight);
 }
 
-// Hero number, then the supporting rows. The full per-level table lives behind
-// the CSV export, not permanently on screen.
+// Whether the current texture is being read as a normal map. BC5 selects it by
+// default; the banner offers the override (PLAN.md M6).
+bool normalModeActive(const AppState& app) {
+    if (!app.slotA.loaded())
+        return false;
+    if (app.view.rawRgOverride)
+        return false;
+    return looksLikeNormalMap(app.slotA.ktx->info().format);
+}
+
+// Hero number, then the supporting rows. In normal-map mode the whole set
+// changes together - hero, rows and plot axis - because degrees and decibels
+// are not interchangeable and a half-swapped panel would invite reading one as
+// the other (CLAUDE.md, PLAN.md M6).
 void drawMetrics(AppState& app) {
-    const bool bcNormal = false;  // BC5 normal-map metrics arrive at M6
-    const char* heroLabel = bcNormal ? "mean angular err" : "PSNR-RGB";
+    const bool normalMode = normalModeActive(app);
+    const char* heroLabel = normalMode ? "mean angular err" : "PSNR-RGB";
 
     std::string hero = kEmptyValue;
-    std::string rmse = kEmptyValue, ssim = kEmptyValue, maxErr = kEmptyValue, alpha = kEmptyValue;
+    std::string rowA = kEmptyValue, rowB = kEmptyValue, rowC = kEmptyValue, rowD = kEmptyValue;
+    const char* labelA = normalMode ? "median" : "RMSE";
+    const char* labelB = normalMode ? "p95" : "SSIM";
+    const char* labelC = normalMode ? "max" : "max err";
+    const char* labelD = normalMode ? "|n| dev" : "alpha";
+
     std::string note;
     bool isError = false;
     bool waiting = false;
 
     if (app.view.compareMode != CompareMode::EncodeFidelity) {
-        note = "modes 2 and 3 arrive at M5";
+        note = "per-level numbers are in the plot and table";
     } else if (!app.slotA.loaded()) {
         note = "no texture in slot A";
     } else if (!app.slotB.isReference()) {
@@ -579,22 +644,39 @@ void drawMetrics(AppState& app) {
             note = result->error().message;
             isError = true;
         } else {
-            const CompareResult& r = **result;
-            hero = formatPsnr(r.rgb.psnr);
-            char buf[64];
-            std::snprintf(buf, sizeof(buf), "%.3f", r.rgb.rmse);
-            rmse = buf;
-            std::snprintf(buf, sizeof(buf), "%.4f", r.ssim);
-            ssim = buf;
-            std::snprintf(buf, sizeof(buf), "%.1f @%d,%d", r.rgb.maxError, r.rgb.maxErrorX,
-                          r.rgb.maxErrorY);
-            maxErr = buf;
-            alpha = r.alpha.identical ? "identical" : formatPsnr(r.alpha.psnr);
-            if (r.excludedNonFinite > 0)
-                note = std::to_string(r.excludedNonFinite) + " texels excluded (NaN/Inf)";
-            // The toggle must be labelled wherever the numbers appear.
-            if (r.linearLight)
-                note = note.empty() ? "linear light" : note + ", linear light";
+            const MetricsResult& m = **result;
+            char buf[80];
+            if (m.normalMode) {
+                std::snprintf(buf, sizeof(buf), "%.3f deg", m.normal.meanAngleDeg);
+                hero = buf;
+                std::snprintf(buf, sizeof(buf), "%.3f", m.normal.medianAngleDeg);
+                rowA = buf;
+                std::snprintf(buf, sizeof(buf), "%.3f", m.normal.p95AngleDeg);
+                rowB = buf;
+                std::snprintf(buf, sizeof(buf), "%.2f @%d,%d", m.normal.maxAngleDeg,
+                              m.normal.maxAngleX, m.normal.maxAngleY);
+                rowC = buf;
+                std::snprintf(buf, sizeof(buf), "%.4f", m.normal.meanLengthDeviation);
+                rowD = buf;
+                if (m.normal.excludedNonFinite > 0)
+                    note = std::to_string(m.normal.excludedNonFinite) + " texels excluded";
+            } else {
+                const CompareResult& c = m.colour;
+                hero = formatPsnr(c.rgb.psnr);
+                std::snprintf(buf, sizeof(buf), "%.3f", c.rgb.rmse);
+                rowA = buf;
+                std::snprintf(buf, sizeof(buf), "%.4f", c.ssim);
+                rowB = buf;
+                std::snprintf(buf, sizeof(buf), "%.1f @%d,%d", c.rgb.maxError, c.rgb.maxErrorX,
+                              c.rgb.maxErrorY);
+                rowC = buf;
+                rowD = c.alpha.identical ? "identical" : formatPsnr(c.alpha.psnr);
+                if (c.excludedNonFinite > 0)
+                    note = std::to_string(c.excludedNonFinite) + " texels excluded (NaN/Inf)";
+                // The toggle must be labelled wherever the numbers appear.
+                if (c.linearLight)
+                    note = note.empty() ? "linear light" : note + ", linear light";
+            }
         }
     } else {
         waiting = true;
@@ -616,10 +698,10 @@ void drawMetrics(AppState& app) {
     }
     endCard();
 
-    field("RMSE", rmse.c_str());
-    field("SSIM", ssim.c_str());
-    field("max err", maxErr.c_str());
-    field("alpha", alpha.c_str());
+    field(labelA, rowA.c_str());
+    field(labelB, rowB.c_str());
+    field(labelC, rowC.c_str());
+    field(labelD, rowD.c_str());
 
     if (!note.empty()) {
         if (isError)
@@ -647,7 +729,10 @@ const ChainReport* currentChainReport(AppState& app) {
 // Error by level. You scan this; you do not read fifteen rows of numbers, which
 // is why the table is behind a toggle (PLAN.md, right rail).
 void drawErrorPlot(AppState& app, const ChainReport* report) {
-    sectionLabel("Error by level");
+    // The axis changes with the metric family, so the label has to as well:
+    // degrees and decibels run in opposite directions.
+    const bool normalMode = report != nullptr && report->normalMode;
+    sectionLabel(normalMode ? "Angular error by level (deg)" : "PSNR by level (dB)");
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg, viewportBgColor());
     ImGui::BeginChild("##errorPlot", ImVec2(0.0f, 132.0f), ImGuiChildFlags_Borders,
@@ -665,9 +750,16 @@ void drawErrorPlot(AppState& app, const ChainReport* report) {
         std::vector<Point> points;
         float lo = 1e9f, hi = -1e9f;
         for (const LevelStats& level : report->levels) {
-            if (!level.hasMetrics || std::isinf(level.metrics.rgb.psnr))
-                continue;
-            const float v = static_cast<float>(level.metrics.rgb.psnr);
+            float v = 0.0f;
+            if (normalMode) {
+                if (!level.hasNormalMetrics)
+                    continue;
+                v = static_cast<float>(level.normal.meanAngleDeg);
+            } else {
+                if (!level.hasMetrics || std::isinf(level.metrics.rgb.psnr))
+                    continue;
+                v = static_cast<float>(level.metrics.rgb.psnr);
+            }
             points.push_back(Point{level.level, v});
             lo = std::min(lo, v);
             hi = std::max(hi, v);
@@ -711,7 +803,8 @@ void drawErrorPlot(AppState& app, const ChainReport* report) {
             };
 
             // The badge threshold, drawn so a spike is read against something.
-            if (app.errorBadgeThresholdDb > lo && app.errorBadgeThresholdDb < hi) {
+            // It only applies to the PSNR axis; degrees have their own scale.
+            if (!normalMode && app.errorBadgeThresholdDb > lo && app.errorBadgeThresholdDb < hi) {
                 const float ty = (app.errorBadgeThresholdDb - lo) / (hi - lo);
                 const float y = plotY1 - ty * (plotY1 - plotY0);
                 draw->AddLine(ImVec2(plotX0, y), ImVec2(plotX1, y),
@@ -734,7 +827,8 @@ void drawErrorPlot(AppState& app, const ChainReport* report) {
                 if (nearPoint && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
                     app.view.level = p.level;
                 if (nearPoint)
-                    ImGui::SetTooltip("level %d: %.2f dB", p.level, static_cast<double>(p.psnr));
+                    ImGui::SetTooltip(normalMode ? "level %d: %.3f deg" : "level %d: %.2f dB",
+                                      p.level, static_cast<double>(p.psnr));
             }
         }
     }
@@ -752,9 +846,10 @@ void drawLevelTable(AppState& app, const ChainReport* report) {
 
     if (ImGui::BeginTable("##levels", 3,
                           ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+        const bool normalMode = report->normalMode;
         ImGui::TableSetupColumn("lvl");
-        ImGui::TableSetupColumn("PSNR");
-        ImGui::TableSetupColumn("SSIM");
+        ImGui::TableSetupColumn(normalMode ? "mean deg" : "PSNR");
+        ImGui::TableSetupColumn(normalMode ? "max deg" : "SSIM");
         ImGui::TableHeadersRow();
         for (const LevelStats& level : report->levels) {
             ImGui::TableNextRow();
@@ -765,12 +860,16 @@ void drawLevelTable(AppState& app, const ChainReport* report) {
                                   ImGuiSelectableFlags_SpanAllColumns))
                 app.view.level = level.level;
             ImGui::TableNextColumn();
-            if (level.hasMetrics)
+            if (normalMode && level.hasNormalMetrics)
+                ImGui::Text("%.4f", level.normal.meanAngleDeg);
+            else if (!normalMode && level.hasMetrics)
                 ImGui::TextUnformatted(formatPsnr(level.metrics.rgb.psnr).c_str());
             else
                 ImGui::TextDisabled("%s", kEmptyValue);
             ImGui::TableNextColumn();
-            if (level.hasMetrics)
+            if (normalMode && level.hasNormalMetrics)
+                ImGui::Text("%.4f", level.normal.maxAngleDeg);
+            else if (!normalMode && level.hasMetrics)
                 ImGui::Text("%.4f", level.metrics.ssim);
             else
                 ImGui::TextDisabled("%s", kEmptyValue);

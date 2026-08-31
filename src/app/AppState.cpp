@@ -143,8 +143,13 @@ void AppState::requestCompare() {
     m_compareToken = (cache.generation(Slot::A) * 1000003ull) ^
                      (reinterpret_cast<std::uintptr_t>(slotB.reference.get()) * 31ull) ^
                      (view.metricLinearLight ? 0x5bf03635ull : 0ull);
+    const FormatId& format = slotA.ktx->info().format;
+    const bool normalMode = looksLikeNormalMap(format) && !view.rawRgOverride;
+    m_compareToken ^= (normalMode ? 0x9e3779b9ull : 0ull);
+
     m_compareAvailable = true;
-    comparer.request(m_compareToken, a, slotB.reference, view.metricLinearLight);
+    comparer.request(m_compareToken, a, slotB.reference, view.metricLinearLight, normalMode,
+                     format.isSigned);
 }
 
 void AppState::requestChain() {
@@ -173,6 +178,8 @@ void AppState::requestChain() {
     input.filter = view.filter;
     input.resampleLinearLight = view.resampleLinearLight;
     input.metricLinearLight = view.metricLinearLight;
+    input.normalMode = looksLikeNormalMap(info.format) && !view.rawRgOverride;
+    input.isSigned = info.format.isSigned;
 
     // Anything that changes the answer has to change the token.
     m_chainToken = (cache.generation(Slot::A) * 2654435761ull) ^
@@ -182,7 +189,8 @@ void AppState::requestChain() {
                    (view.metricLinearLight ? 0x2000ull : 0ull) ^
                    (reinterpret_cast<std::uintptr_t>(input.reference.get()) * 31ull) ^
                    (static_cast<std::uint64_t>(view.layer) << 20) ^
-                   (static_cast<std::uint64_t>(view.face) << 28);
+                   (static_cast<std::uint64_t>(view.face) << 28) ^
+                   (input.normalMode ? 0x4d2ull : 0ull);
     m_chainAvailable = true;
     chainAnalyser.request(m_chainToken, std::move(input));
 }

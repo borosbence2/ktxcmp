@@ -187,6 +187,26 @@ bool writeCheckerChain(const std::filesystem::path& path, int size, bool linearL
     return rc == KTX_SUCCESS;
 }
 
+// A single-level BC5 UNORM texture holding the encoder's output.
+bool writeBc5Normal(const std::filesystem::path& path, int size) {
+    ktxTextureCreateInfo ci = makeInfo(size, size, 1);
+    ci.vkFormat = kVkBc5Unorm;
+    ktxTexture2* t = nullptr;
+    if (ktxTexture2_Create(&ci, KTX_TEXTURE_CREATE_ALLOC_STORAGE, &t) != KTX_SUCCESS)
+        return false;
+
+    const std::vector<std::uint8_t> blocks = encodeBc5Normals(size, size);
+    if (blocks.size() != ktxTexture_GetDataSize(ktxTexture(t))) {
+        ktxTexture_Destroy(ktxTexture(t));
+        return false;
+    }
+    std::memcpy(ktxTexture_GetData(ktxTexture(t)), blocks.data(), blocks.size());
+
+    const KTX_error_code rc = ktxTexture_WriteToNamedFile(ktxTexture(t), path.string().c_str());
+    ktxTexture_Destroy(ktxTexture(t));
+    return rc == KTX_SUCCESS;
+}
+
 std::vector<std::uint8_t> readAll(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
     return std::vector<std::uint8_t>((std::istreambuf_iterator<char>(in)),
@@ -278,6 +298,8 @@ bool writeFixtures(const std::filesystem::path& dir) {
     if (!writeCheckerChain(dir / kGammaMipsFixture, kCheckerSize, false))
         return false;
     if (!writeCheckerChain(dir / kLinearMipsFixture, kCheckerSize, true))
+        return false;
+    if (!writeBc5Normal(dir / kBc5NormalFixture, kNormalSize))
         return false;
 
     // Every file the spec promises must now exist, or the two have drifted.

@@ -9,6 +9,7 @@
 
 #include "compare/CompareMode.hpp"
 #include "compare/CompareEngine.hpp"
+#include "compare/NormalMap.hpp"
 #include "compare/Resampler.hpp"
 #include "core/Error.hpp"
 #include "core/Surface.hpp"
@@ -27,6 +28,11 @@ struct LevelStats {
 
     bool hasMetrics = false;
     CompareResult metrics{};
+
+    // In normal-map mode this replaces the colour metrics entirely; the two are
+    // never both present (CLAUDE.md: PSNR is not reported for a normal map).
+    bool hasNormalMetrics = false;
+    NormalMetrics normal{};
     std::string note;  // why there is no metric, when there is none
 
     // Validation, computed whether or not a comparison was possible.
@@ -47,6 +53,7 @@ struct ChainReport {
     Filter filter = Filter::Lanczos3;
     bool resampleLinearLight = true;
     bool metricLinearLight = false;
+    bool normalMode = false;
 
     int baseWidth = 0;
     int baseHeight = 0;
@@ -69,6 +76,11 @@ struct ChainInput {
     Filter filter = Filter::Lanczos3;
     bool resampleLinearLight = true;
     bool metricLinearLight = false;
+
+    // Normal maps are compared by angle, and a resampled normal map has to be
+    // renormalised first (CLAUDE.md, trap 7).
+    bool normalMode = false;
+    bool isSigned = false;
 };
 
 [[nodiscard]] Result<ChainReport> analyseChain(const ChainInput& input);
