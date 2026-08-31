@@ -141,10 +141,15 @@ ambiguity in mode 2. Support this.
     poison a mean. Every metric must exclude or report non-finite texels, and the viewer must
     render them as a distinct colour rather than whatever the hardware makes of a NaN. BC and
     uncompressed formats cannot produce this; ASTC can, from any corrupt payload.
-11. libktx's full build embeds its own copy of astc-encoder. Linking it alongside our
-    decoder-only build gives the linker two definitions of every internal astcenc symbol, and
-    it resolves them silently rather than erroring. Link `ktx_read` everywhere except the
-    fixture writer.
+11. libktx embeds its own copy of astc-encoder, and on Apple it merges that copy into its
+    static archive - for `ktx_read` as well as `ktx`. A Mach-O link then resolves astcenc
+    symbols from whichever archive comes first, with no diagnostic at all; MSVC at least
+    errors. If the two copies are different versions, the winning code is called through the
+    losing version's headers, and ASTC decodes to a constant instead of an image. macOS CI
+    caught exactly this. `cmake/Dependencies.cmake` therefore reads the version out of
+    libktx's vendored copy and fetches astc-encoder at that same tag, so the two are
+    ABI-identical and it no longer matters which wins. Do not pin that version by hand.
+    Note the API moves between versions: `astcenc_context_alloc` lost a parameter after 5.3.
 
 ## Conventions
 

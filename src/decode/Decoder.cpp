@@ -118,7 +118,7 @@ Result<Surface> decodeAstc(const FormatId& format, std::span<const std::uint8_t>
                     std::string("astcenc config failed: ") + astcenc_get_error_string(rc));
 
     astcenc_context* context = nullptr;
-    rc = astcenc_context_alloc(&config, 1, &context, nullptr);
+    rc = astcenc_context_alloc(&config, 1, &context);
     if (rc != ASTCENC_SUCCESS || context == nullptr)
         return fail(ErrorCode::Internal,
                     std::string("astcenc context failed: ") + astcenc_get_error_string(rc));
