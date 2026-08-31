@@ -35,11 +35,17 @@ add_subdirectory(third_party/imgui)
 
 add_executable(ktxcmp
     src/main.cpp
+    src/core/Error.cpp
     src/ui/Theme.cpp
     src/ui/Ui.cpp
     src/ui/Panels.cpp)
 
 target_include_directories(ktxcmp PRIVATE src)
+
+# C++23 for std::expected, on our target only. The dependencies stay at the
+# global C++20 default: /std:c++latest is a preview mode and there is no reason
+# to push basisu or SDL through it.
+target_compile_features(ktxcmp PRIVATE cxx_std_23)
 
 target_link_libraries(ktxcmp PRIVATE
     ktxcmp::imgui

@@ -24,7 +24,7 @@ Deferred, plausible later: DDS reading, BC6H + HDR pipeline.
 
 ## Stack
 
-- C++20, CMake 3.25+
+- C++23 for the app target (`std::expected`), C++20 for dependencies. CMake 3.25+
 - SDL3 (window + input)
 - Dear ImGui (docking branch) with `imgui_impl_sdl3` + `imgui_impl_opengl3`
 - OpenGL 3.3 core (deprecated on macOS but functional; GPU work is only "upload RGBA and draw a quad")
@@ -139,10 +139,14 @@ ambiguity in mode 2. Support this.
 
 ## Conventions
 
-- C++20. `std::filesystem`, `std::span`, designated initialisers are fine.
-- Error handling: `std::expected<T, Error>`-style returns in the non-UI layers. No exceptions
-  across layer boundaries. libktx returns error codes — wrap them, do not let `ktx_error_code_e`
-  leak upward.
+- C++23 on the `ktxcmp` target only; dependencies stay at C++20. `std::filesystem`,
+  `std::span`, designated initialisers are fine. MSVC needs `/std:c++latest` for
+  `std::expected`, which is why the app target asks for `cxx_std_23` rather than the
+  project defaulting to it: there is no reason to push basisu or SDL through a preview mode.
+- Error handling: `Result<T>` in `core/Error.hpp`, an alias for `std::expected<T, Error>`.
+  Return it from the non-UI layers. No exceptions across layer boundaries. libktx returns
+  error codes — wrap them, do not let `ktx_error_code_e` leak upward. The alias is the seam:
+  if a target's standard library lacks `<expected>`, only that line changes.
 - No singletons. `AppState` is constructed in `main` and passed by reference.
 - Decode work runs on a worker pool; the UI thread never blocks on a decode. Panels render a
   placeholder for a pending subresource.
