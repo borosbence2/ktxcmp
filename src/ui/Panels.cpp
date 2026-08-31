@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <memory>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -172,6 +173,25 @@ void drawDropTarget() {
     endCard();
 }
 
+std::uint32_t channelKeyOf(const ChannelMask& c) {
+    return (c.r ? 1u : 0u) | (c.g ? 2u : 0u) | (c.b ? 4u : 0u) | (c.a ? 8u : 0u);
+}
+
+// Drops every built texture when the channel mask changes, so the next frames
+// rebuild them from the display cache rather than showing the old isolation.
+void syncChannelGeneration(AppState& app, UiState& ui) {
+    const std::uint32_t key = channelKeyOf(app.view.channels);
+    if (key == ui.builtChannels)
+        return;
+    ui.builtChannels = key;
+    for (auto& t : ui.levelTextures)
+        if (t)
+            t->release();
+    for (auto& t : ui.thumbnails)
+        if (t)
+            t->release();
+}
+
 // ------------------------------------------------------------- viewport ----
 
 void drawViewModeRow(AppState& app) {
@@ -195,22 +215,41 @@ void drawViewportBody(AppState& app, UiState& ui, float height) {
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
     SlotState& slot = app.slotA;
-    const Surface* surface = slot.surface ? &*slot.surface : nullptr;
-    if (surface)
-        ui.texture.update(*surface, app.view.channels);
-    else
-        ui.texture.release();
+    const SubresourceKey key = app.selectionKey(Slot::A);
+    const CacheState cacheState = slot.loaded() ? app.cache.state(key) : CacheState::Missing;
+    SurfacePtr held = app.cache.get(key);
+    const Surface* surface = held.get();
+
+    ImageTexture* texture = nullptr;
+    if (slot.loaded()) {
+        const int levels = slot.ktx->info().levelCount;
+        ui.levelTextures.resize(static_cast<std::size_t>(levels));
+        const std::size_t index = static_cast<std::size_t>(app.view.level);
+        if (index < ui.levelTextures.size()) {
+            auto& entry = ui.levelTextures[index];
+            if (!entry)
+                entry = std::make_unique<ImageTexture>();
+            texture = entry.get();
+
+            const DisplayKey dk{key, ui.builtChannels, 0};
+            if (held)
+                ui.display.request(dk, held, 0);
+            if (auto image = ui.display.get(dk))
+                texture->update(image);
+        }
+    }
+    const bool haveTexture = texture != nullptr && texture->valid();
 
     const ImVec2 origin = ImGui::GetWindowPos();
     const ImVec2 size = ImGui::GetWindowSize();
-    const bool haveImage = ui.texture.valid();
-    const float imgW = static_cast<float>(ui.texture.width());
-    const float imgH = static_cast<float>(ui.texture.height());
+    const bool haveImage = haveTexture;
+    const float imgW = haveImage ? static_cast<float>(texture->width()) : 1.0f;
+    const float imgH = haveImage ? static_cast<float>(texture->height()) : 1.0f;
 
     const bool sizeChanged =
         std::fabs(size.x - ui.fittedW) > 0.5f || std::fabs(size.y - ui.fittedH) > 0.5f;
-    const bool imageChanged =
-        ui.texture.width() != ui.fittedTexW || ui.texture.height() != ui.fittedTexH;
+    const bool imageChanged = haveImage && (texture->width() != ui.fittedTexW ||
+                                            texture->height() != ui.fittedTexH);
     if (haveImage && size.x > 1.0f && size.y > 1.0f &&
         (ui.fitRequested || (ui.autoFit && (sizeChanged || imageChanged)))) {
         const float fit = std::min(size.x / imgW, size.y / imgH);
@@ -221,8 +260,8 @@ void drawViewportBody(AppState& app, UiState& ui, float height) {
         ui.autoFit = true;
         ui.fittedW = size.x;
         ui.fittedH = size.y;
-        ui.fittedTexW = ui.texture.width();
-        ui.fittedTexH = ui.texture.height();
+        ui.fittedTexW = texture->width();
+        ui.fittedTexH = texture->height();
     }
 
     const bool hovered = ImGui::IsWindowHovered();
@@ -253,7 +292,7 @@ void drawViewportBody(AppState& app, UiState& ui, float height) {
     if (haveImage) {
         const ImVec2 topLeft(origin.x + ui.panX, origin.y + ui.panY);
         ImGui::SetCursorScreenPos(topLeft);
-        ImGui::Image(static_cast<ImTextureID>(ui.texture.id()),
+        ImGui::Image(static_cast<ImTextureID>(texture->id()),
                      ImVec2(imgW * ui.zoom, imgH * ui.zoom));
 
         ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -267,14 +306,14 @@ void drawViewportBody(AppState& app, UiState& ui, float height) {
             const float y1 = std::min(topLeft.y + imgH * ui.zoom, origin.y + size.y);
             const int firstX = static_cast<int>(std::max(0.0f, (origin.x - topLeft.x) / ui.zoom));
             const int firstY = static_cast<int>(std::max(0.0f, (origin.y - topLeft.y) / ui.zoom));
-            for (int x = firstX; x <= ui.texture.width(); ++x) {
+            for (int x = firstX; x <= texture->width(); ++x) {
                 const float px = topLeft.x + static_cast<float>(x) * ui.zoom;
                 if (px > x1)
                     break;
                 if (px >= x0)
                     draw->AddLine(ImVec2(px, y0), ImVec2(px, y1), line);
             }
-            for (int y = firstY; y <= ui.texture.height(); ++y) {
+            for (int y = firstY; y <= texture->height(); ++y) {
                 const float py = topLeft.y + static_cast<float>(y) * ui.zoom;
                 if (py > y1)
                     break;
@@ -296,12 +335,15 @@ void drawViewportBody(AppState& app, UiState& ui, float height) {
                     ui.hoverValue[c] = v[c];
             }
         }
-    } else if (slot.decodeError) {
+    } else if (cacheState == CacheState::Failed) {
+        const auto err = app.cache.error(key);
         ImGui::PushStyleColor(ImGuiCol_Text, errorColor());
-        centeredHint(slot.decodeError->message.c_str());
+        centeredHint(err ? err->message.c_str() : "decode failed");
         ImGui::PopStyleColor();
+    } else if (cacheState == CacheState::Pending || (slot.loaded() && !surface)) {
+        pendingHint("decoding");
     } else {
-        centeredHint(slot.loaded() ? "Decoding..." : "No image loaded");
+        centeredHint("No image loaded");
     }
 
     const float pad = ImGui::GetStyle().FramePadding.x + 2.0f;
@@ -469,6 +511,7 @@ void drawSourcesPanel(AppState& app) {
 }
 
 void drawViewportPanel(AppState& app, UiState& ui) {
+    syncChannelGeneration(app, ui);
     if (ImGui::Begin(kWinViewport)) {
         drawViewModeRow(app);
 
@@ -494,37 +537,140 @@ void drawAnalysisPanel(AppState& app) {
     ImGui::End();
 }
 
-void drawMipStripPanel(AppState& app) {
+namespace {
+
+void drawSubresourceSelectors(AppState& app) {
+    if (!app.slotA.loaded())
+        return;
+    const KtxInfo& info = app.slotA.ktx->info();
+    if (info.layerCount <= 1 && info.faceCount <= 1 && info.baseDepth <= 1)
+        return;  // nothing to choose between, so nothing to show
+
+    const float width = 92.0f * app.uiScale;
+    if (info.layerCount > 1) {
+        ImGui::SetNextItemWidth(width);
+        if (ImGui::SliderInt("layer", &app.view.layer, 0, info.layerCount - 1))
+            app.clampSelection();
+        ImGui::SameLine(0.0f, 14.0f);
+    }
+    if (info.faceCount > 1) {
+        ImGui::SetNextItemWidth(width);
+        if (ImGui::SliderInt("face", &app.view.face, 0, info.faceCount - 1))
+            app.clampSelection();
+        ImGui::SameLine(0.0f, 14.0f);
+    }
+    if (info.baseDepth > 1) {
+        // Depth slices live inside a level, so they are a view of the decoded
+        // surface rather than a separate subresource.
+        ImGui::TextDisabled("depth %d", info.baseDepth);
+        ImGui::SameLine(0.0f, 14.0f);
+    }
+    ImGui::NewLine();
+}
+
+}  // namespace
+
+void drawMipStripPanel(AppState& app, UiState& ui) {
     if (ImGui::Begin(kWinMipStrip)) {
         if (!app.slotA.loaded()) {
             if (beginCard("##mipStrip"))
                 centeredHint("No mip levels");
             endCard();
-        } else {
-            // Thumbnails and warning badges arrive at M3/M5; the strip is already
-            // the navigation, so the levels are selectable now.
-            const KtxInfo& info = app.slotA.ktx->info();
-            const float cellW = 84.0f * app.uiScale;
-            const float cellH = ImGui::GetContentRegionAvail().y - ImGui::GetStyle().ScrollbarSize;
-            ImGui::BeginChild("##mipStrip", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
-                              ImGuiWindowFlags_HorizontalScrollbar);
-            for (int level = 0; level < info.levelCount; ++level) {
-                const LevelInfo& li = info.levels[static_cast<std::size_t>(level)];
-                if (level > 0)
-                    ImGui::SameLine();
-                ImGui::BeginGroup();
-                char label[64];
-                std::snprintf(label, sizeof(label), "%d\n%dx%d##lvl%d", level, li.w, li.h, level);
-                if (toggleButton(label, app.view.level == level,
-                                 ImVec2(cellW, cellH > 0.0f ? cellH : 0.0f)))
-                    app.view.level = level;
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("level %d: %dx%d, %s", level, li.w, li.h,
-                                      byteSizeText(li.imageBytes).c_str());
-                ImGui::EndGroup();
-            }
-            ImGui::EndChild();
+            ImGui::End();
+            return;
         }
+
+        drawSubresourceSelectors(app);
+
+        const KtxInfo& info = app.slotA.ktx->info();
+        const int levels = info.levelCount;
+        ui.thumbnails.resize(static_cast<std::size_t>(levels));
+
+        const float cellW = 84.0f * app.uiScale;
+        const float cellH = ImGui::GetContentRegionAvail().y - ImGui::GetStyle().ScrollbarSize;
+        ImGui::BeginChild("##mipStrip", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
+                          ImGuiWindowFlags_HorizontalScrollbar);
+
+        // Building a thumbnail means a full RGBA8 conversion plus a mip chain, so
+        // only a couple are uploaded per frame. They arrive progressively anyway.
+        int builtThisFrame = 0;
+
+        for (int level = 0; level < levels; ++level) {
+            const LevelInfo& li = info.levels[static_cast<std::size_t>(level)];
+            if (level > 0)
+                ImGui::SameLine();
+
+            const SubresourceKey key{Slot::A, level, app.view.layer, app.view.face};
+            const CacheState st = app.cache.state(key);
+
+            auto& slotTex = ui.thumbnails[static_cast<std::size_t>(level)];
+            if (st == CacheState::Ready) {
+                if (!slotTex)
+                    slotTex = std::make_unique<ImageTexture>();
+                const DisplayKey dk{key, ui.builtChannels, static_cast<int>(96.0f * app.uiScale)};
+                if (!slotTex->valid())
+                    ui.display.request(dk, app.cache.get(key), 1);
+                // One upload per frame: the conversion is off-thread but the GL
+                // call is not, and twelve at once is a visible hitch.
+                if (!slotTex->valid() && builtThisFrame < 1) {
+                    if (auto image = ui.display.get(dk)) {
+                        slotTex->update(image);
+                        ++builtThisFrame;
+                    }
+                }
+            }
+
+            const ImVec2 cellSize(cellW, cellH > 0.0f ? cellH : 0.0f);
+            const ImVec2 cellPos = ImGui::GetCursorScreenPos();
+
+            ImGui::BeginGroup();
+            char id[32];
+            std::snprintf(id, sizeof(id), "##lvl%d", level);
+            if (toggleButton(id, app.view.level == level, cellSize))
+                app.view.level = level;
+            const bool hovered = ImGui::IsItemHovered();
+
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            const float pad = 4.0f * app.uiScale;
+
+            char caption[48];
+            std::snprintf(caption, sizeof(caption), "%d  %dx%d", level, li.w, li.h);
+            const ImVec2 capSize = ImGui::CalcTextSize(caption);
+            const float capY = cellPos.y + cellSize.y - capSize.y - pad;
+
+            if (slotTex && slotTex->valid()) {
+                const float availH = capY - cellPos.y - pad * 2.0f;
+                const float availW = cellSize.x - pad * 2.0f;
+                const float tw = static_cast<float>(slotTex->width());
+                const float th = static_cast<float>(slotTex->height());
+                const float scale = std::min(availW / tw, availH / th);
+                const ImVec2 drawSize(tw * scale, th * scale);
+                const ImVec2 at(cellPos.x + (cellSize.x - drawSize.x) * 0.5f,
+                                cellPos.y + pad + (availH - drawSize.y) * 0.5f);
+                draw->AddImage(static_cast<ImTextureID>(slotTex->id()), at,
+                               ImVec2(at.x + drawSize.x, at.y + drawSize.y));
+            } else if (st == CacheState::Failed) {
+                ImGui::PushStyleColor(ImGuiCol_Text, errorColor());
+                const ImVec2 t = ImGui::CalcTextSize("failed");
+                draw->AddText(ImVec2(cellPos.x + (cellSize.x - t.x) * 0.5f,
+                                     cellPos.y + cellSize.y * 0.4f),
+                              ImGui::GetColorU32(errorColor()), "failed");
+                ImGui::PopStyleColor();
+            } else {
+                drawPendingIndicator(
+                    ImVec2(cellPos.x + cellSize.x * 0.5f, cellPos.y + cellSize.y * 0.4f),
+                    9.0f * app.uiScale);
+            }
+
+            draw->AddText(ImVec2(cellPos.x + (cellSize.x - capSize.x) * 0.5f, capY),
+                          ImGui::GetColorU32(ImGuiCol_Text), caption);
+            ImGui::EndGroup();
+
+            if (hovered)
+                ImGui::SetTooltip("level %d: %dx%d, %s", level, li.w, li.h,
+                                  byteSizeText(li.imageBytes).c_str());
+        }
+        ImGui::EndChild();
     }
     ImGui::End();
 }

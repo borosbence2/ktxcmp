@@ -37,9 +37,12 @@ add_executable(ktxcmp
     src/main.cpp
     src/app/AppState.cpp
     src/core/Error.cpp
+    src/cache/ImageCache.cpp
     src/container/FormatId.cpp
     src/container/KtxFile.cpp
     src/decode/Decoder.cpp
+    src/decode/DecodeService.cpp
+    src/ui/DisplayCache.cpp
     src/ui/ImageTexture.cpp
     src/ui/Theme.cpp
     src/ui/Ui.cpp
@@ -101,9 +104,11 @@ enable_testing()
 # beside our decoder-only build duplicates every internal symbol.
 set(KTXCMP_LAYER_SOURCES
     src/core/Error.cpp
+    src/cache/ImageCache.cpp
     src/container/FormatId.cpp
     src/container/KtxFile.cpp
-    src/decode/Decoder.cpp)
+    src/decode/Decoder.cpp
+    src/decode/DecodeService.cpp)
 
 add_executable(make_fixtures
     tests/make_fixtures.cpp
@@ -129,7 +134,14 @@ target_include_directories(decode_test PRIVATE src tests third_party/bcdec)
 target_compile_features(decode_test PRIVATE cxx_std_23)
 target_link_libraries(decode_test PRIVATE ktx_read ${KTXCMP_ASTCDEC_TARGET})
 
-foreach(t make_fixtures container_test decode_test)
+add_executable(cache_test
+    tests/cache_test.cpp
+    ${KTXCMP_LAYER_SOURCES})
+target_include_directories(cache_test PRIVATE src tests third_party/bcdec)
+target_compile_features(cache_test PRIVATE cxx_std_23)
+target_link_libraries(cache_test PRIVATE ktx_read ${KTXCMP_ASTCDEC_TARGET})
+
+foreach(t make_fixtures container_test decode_test cache_test)
     if(MSVC)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
     else()
@@ -144,4 +156,5 @@ set_tests_properties(fixtures PROPERTIES FIXTURES_SETUP corpus)
 
 add_test(NAME container COMMAND container_test --corpus "${KTXCMP_FIXTURE_DIR}")
 add_test(NAME decode COMMAND decode_test "${KTXCMP_FIXTURE_DIR}")
+add_test(NAME cache COMMAND cache_test)
 set_tests_properties(container decode PROPERTIES FIXTURES_REQUIRED corpus)

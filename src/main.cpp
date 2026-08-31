@@ -9,6 +9,7 @@
 #include <imgui_impl_opengl3.h>
 #include <imgui_impl_sdl3.h>
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
@@ -146,6 +147,17 @@ int main(int argc, char** argv) {
 
     SDL_ShowWindow(window);
 
+    // The M3 claim is "navigable with no UI stall", so measure it rather than
+    // assert it. Reported once on exit; a decode landing on the UI thread would
+    // show up here immediately.
+    double worstFrameMs = 0.0;
+    double totalFrameMs = 0.0;
+    int frameCount = 0;
+    int framesOver16 = 0;
+    int framesOver33 = 0;
+    std::uint64_t lastCounter = SDL_GetPerformanceCounter();
+    const double counterPeriod = 1000.0 / static_cast<double>(SDL_GetPerformanceFrequency());
+
     while (app.running) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
@@ -165,10 +177,9 @@ int main(int argc, char** argv) {
         }
         app.processPendingOpens();
 
-        // M3 moves this onto a worker pool; for now the files are small enough
-        // that a synchronous decode does not stall a frame noticeably.
+        // Only asks; the workers deliver into the cache on their own schedule.
         const int levelBefore = app.view.level;
-        app.ensureDecoded(ktxcmp::Slot::A);
+        app.requestVisible();
         if (app.view.level != levelBefore)
             uiState.fitRequested = true;
 
@@ -194,7 +205,28 @@ int main(int argc, char** argv) {
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         SDL_GL_SwapWindow(window);
+
+        const std::uint64_t now = SDL_GetPerformanceCounter();
+        const double frameMs = static_cast<double>(now - lastCounter) * counterPeriod;
+        lastCounter = now;
+        // The first frames include window creation and the initial file load.
+        if (++frameCount > 5) {
+            totalFrameMs += frameMs;
+            if (frameMs > worstFrameMs)
+                worstFrameMs = frameMs;
+            if (frameMs > 16.7)
+                ++framesOver16;
+            if (frameMs > 33.3)
+                ++framesOver33;
+        }
     }
+
+    if (frameCount > 5)
+        SDL_Log("frames %d | mean %.2f ms | worst %.2f ms | over 16.7ms: %d | over 33ms: %d "
+                "| cache %zu MB in %zu entries",
+                frameCount, totalFrameMs / static_cast<double>(frameCount - 5), worstFrameMs,
+                framesOver16, framesOver33, app.cache.bytesUsed() / (1024u * 1024u),
+                app.cache.entryCount());
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();

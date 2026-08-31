@@ -3,18 +3,20 @@
 // Application state. Constructed in main and passed by reference; there are no
 // singletons (CLAUDE.md, Conventions).
 
+#include "cache/ImageCache.hpp"
 #include "container/KtxFile.hpp"
 #include "core/Error.hpp"
+#include "core/Subresource.hpp"
 #include "core/Surface.hpp"
+#include "decode/DecodeService.hpp"
 
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <vector>
 
 namespace ktxcmp {
-
-enum class Slot { A, B };
 
 // The view-mode row above the viewport.
 enum class ViewMode { A, B, Diff, Split, Onion };
@@ -57,37 +59,26 @@ struct ViewState {
 // message: an empty slot and a rejected slot are not the same state.
 struct SlotState {
     std::filesystem::path path;
-    std::optional<KtxFile> ktx;
+
+    // shared_ptr, not optional: a decode job holds a reference for its lifetime,
+    // so loading a new file cannot free bytes a worker is still reading.
+    std::shared_ptr<KtxFile> ktx;
     std::optional<Error> error;
 
-    // The decoded subresource currently on screen. M3 replaces this with an LRU
-    // cache and a worker pool; for now one level is decoded on demand.
-    std::optional<Surface> surface;
-    int surfaceLevel = -1;
-    int surfaceLayer = -1;
-    int surfaceFace = -1;
-    std::optional<Error> decodeError;
-
-    [[nodiscard]] bool loaded() const { return ktx.has_value(); }
+    [[nodiscard]] bool loaded() const { return ktx != nullptr; }
     [[nodiscard]] bool failed() const { return error.has_value(); }
-    void clear() {
-        path.clear();
-        ktx.reset();
-        error.reset();
-        dropSurface();
-    }
-    void dropSurface() {
-        surface.reset();
-        surfaceLevel = surfaceLayer = surfaceFace = -1;
-        decodeError.reset();
-    }
 };
 
 class AppState {
 public:
+    AppState();
+
     SlotState slotA;
     SlotState slotB;
     ViewState view;
+
+    ImageCache cache;
+    DecodeService decoder;
 
     float uiScale = 1.0f;  // display content scale, applied to layout constants
     bool  running = true;
@@ -104,13 +95,19 @@ public:
 
     void loadIntoSlot(Slot slot, const std::filesystem::path& path);
 
-    // Decodes the selected subresource if it is not already the one held.
-    void ensureDecoded(Slot slot);
+    // Asks for what the UI is about to draw: the selected subresource first,
+    // then every level for the mip strip. Cheap to call every frame - the cache
+    // rejects anything already present or in flight.
+    void requestVisible();
 
+    [[nodiscard]] SubresourceKey selectionKey(Slot slot) const;
     [[nodiscard]] SlotState& slot(Slot which) { return which == Slot::A ? slotA : slotB; }
     [[nodiscard]] const SlotState& slot(Slot which) const {
         return which == Slot::A ? slotA : slotB;
     }
+
+    // Clamps the selection to what the loaded file actually has.
+    void clampSelection();
 
 private:
     std::mutex m_pendingMutex;

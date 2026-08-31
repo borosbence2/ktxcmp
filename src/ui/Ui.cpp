@@ -11,7 +11,19 @@
 #include <imgui.h>
 #include <imgui_internal.h>  // DockBuilder, BeginViewportSideBar, ImHashStr
 
+#include <thread>
+
 namespace ktxcmp::ui {
+
+namespace {
+unsigned displayWorkers() {
+    const unsigned hardware = std::thread::hardware_concurrency();
+    return hardware > 2 ? 2u : 1u;
+}
+}  // namespace
+
+UiState::UiState() : display(displayWorkers()) {}
+
 namespace {
 
 ImGuiID dockspaceId() {
@@ -99,6 +111,29 @@ void field(const char* label, const char* value) {
     if (avail > valueWidth)
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - valueWidth);
     ImGui::TextUnformatted(value);
+}
+
+// A single arc sweeping round. Deliberately the only "waiting" visual in the
+// program, so a pending thumbnail and a pending viewport read as the same state.
+void drawPendingIndicator(ImVec2 centre, float radius) {
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const float t = static_cast<float>(ImGui::GetTime());
+    const float start = t * 3.0f;
+    const ImU32 colour = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    draw->PathClear();
+    draw->PathArcTo(centre, radius, start, start + 1.9f, 24);
+    draw->PathStroke(colour, ImDrawFlags_None, radius * 0.28f);
+}
+
+void pendingHint(const char* what) {
+    const ImVec2 pos = ImGui::GetWindowPos();
+    const ImVec2 size = ImGui::GetWindowSize();
+    const ImVec2 centre(pos.x + size.x * 0.5f, pos.y + size.y * 0.5f - 10.0f);
+    drawPendingIndicator(centre, 11.0f);
+
+    const ImVec2 textSize = ImGui::CalcTextSize(what);
+    ImGui::SetCursorScreenPos(ImVec2(centre.x - textSize.x * 0.5f, centre.y + 18.0f));
+    ImGui::TextDisabled("%s", what);
 }
 
 bool beginCard(const char* id, float height) {
@@ -218,7 +253,7 @@ void drawFrame(AppState& app, UiState& ui) {
     drawSourcesPanel(app);
     drawViewportPanel(app, ui);
     drawAnalysisPanel(app);
-    drawMipStripPanel(app);
+    drawMipStripPanel(app, ui);
 }
 
 }  // namespace ktxcmp::ui

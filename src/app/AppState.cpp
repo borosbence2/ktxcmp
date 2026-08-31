@@ -1,14 +1,27 @@
 #include "app/AppState.hpp"
 
-#include "decode/Decoder.hpp"
-
 #include <algorithm>
+#include <cctype>
+#include <thread>
 #include <utility>
 
 namespace ktxcmp {
 namespace {
 
-// Lower-cased extension, so ".KTX2" and ".ktx2" are one case.
+// A 2048 square RGBA32F level is 64 MB, so a full 12-level chain is about 85 MB.
+// This holds a couple of chains without letting a folder of large textures grow
+// without bound.
+constexpr std::size_t kCacheBudget = 384u * 1024u * 1024u;
+
+unsigned workerCount() {
+    const unsigned hardware = std::thread::hardware_concurrency();
+    if (hardware <= 1)
+        return 1;
+    // Leave the UI thread a core of its own, and do not spawn more workers than
+    // a mip chain has levels worth decoding in parallel.
+    return std::min(hardware - 1u, 4u);
+}
+
 std::string extensionOf(const std::filesystem::path& path) {
     std::string ext = path.extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(),
@@ -17,6 +30,8 @@ std::string extensionOf(const std::filesystem::path& path) {
 }
 
 }  // namespace
+
+AppState::AppState() : cache(kCacheBudget), decoder(cache, workerCount()) {}
 
 void AppState::enqueueOpen(std::filesystem::path path) {
     const std::lock_guard<std::mutex> lock(m_pendingMutex);
@@ -36,7 +51,14 @@ void AppState::processPendingOpens() {
 
 void AppState::loadIntoSlot(Slot which, const std::filesystem::path& path) {
     SlotState& target = slot(which);
-    target.clear();
+
+    // Drop queued work and invalidate cached levels before the file changes.
+    // Anything already running finishes and is discarded on its generation check.
+    decoder.cancel(which);
+    cache.invalidate(which);
+
+    target.ktx.reset();
+    target.error.reset();
     target.path = path;
 
     // A dropped PNG is a reasonable thing for someone to try, and "not a KTX
@@ -52,48 +74,45 @@ void AppState::loadIntoSlot(Slot which, const std::filesystem::path& path) {
         target.error = opened.error();
         return;
     }
+    target.ktx = std::make_shared<KtxFile>(std::move(*opened));
 
-    target.ktx = std::move(*opened);
+    view.level = 0;
+    clampSelection();
+}
 
-    // The previous selection may not exist in this file.
+void AppState::clampSelection() {
+    const SlotState& target = slot(view.slot);
+    if (!target.loaded())
+        return;
     const KtxInfo& info = target.ktx->info();
     view.level = std::clamp(view.level, 0, info.levelCount - 1);
     view.layer = std::clamp(view.layer, 0, info.layerCount - 1);
-    view.face  = std::clamp(view.face, 0, info.faceCount - 1);
+    view.face = std::clamp(view.face, 0, info.faceCount - 1);
 }
 
-void AppState::ensureDecoded(Slot which) {
-    SlotState& target = slot(which);
-    if (!target.loaded())
-        return;
+SubresourceKey AppState::selectionKey(Slot which) const {
+    return SubresourceKey{which, view.level, view.layer, view.face};
+}
 
-    const KtxInfo& info = target.ktx->info();
-    const int level = std::clamp(view.level, 0, info.levelCount - 1);
-    const int layer = std::clamp(view.layer, 0, info.layerCount - 1);
-    const int face = std::clamp(view.face, 0, info.faceCount - 1);
+void AppState::requestVisible() {
+    clampSelection();
 
-    if (target.surface && target.surfaceLevel == level && target.surfaceLayer == layer &&
-        target.surfaceFace == face)
-        return;
+    for (const Slot which : {Slot::A, Slot::B}) {
+        SlotState& target = slot(which);
+        if (!target.loaded())
+            continue;
 
-    target.dropSurface();
-    target.surfaceLevel = level;
-    target.surfaceLayer = layer;
-    target.surfaceFace = face;
+        // What the user is looking at goes first.
+        decoder.request(selectionKey(which), target.ktx, DecodeService::kVisible);
 
-    auto bytes = target.ktx->levelBytes(level, layer, face);
-    if (!bytes) {
-        target.decodeError = bytes.error();
-        return;
+        // Then every level, for the strip. The queue orders these smallest
+        // first, so the strip fills from the cheap end while level 0 works.
+        const KtxInfo& info = target.ktx->info();
+        for (int level = 0; level < info.levelCount; ++level) {
+            const SubresourceKey key{which, level, view.layer, view.face};
+            decoder.request(key, target.ktx, DecodeService::kThumbnail);
+        }
     }
-    const LevelInfo& li = info.levels[static_cast<std::size_t>(level)];
-    auto decoded = decode(info.format, *bytes, li.w, li.h, li.d);
-    if (!decoded) {
-        target.decodeError = decoded.error();
-        return;
-    }
-    target.surface = std::move(*decoded);
-    target.surface->premultiplied = info.premultiplied.value_or(false);
 }
 
 }  // namespace ktxcmp

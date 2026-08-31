@@ -1,8 +1,12 @@
 #pragma once
 
+#include "ui/DisplayCache.hpp"
 #include "ui/ImageTexture.hpp"
 
 #include <imgui.h>
+
+#include <memory>
+#include <vector>
 
 namespace ktxcmp {
 class AppState;
@@ -13,7 +17,19 @@ namespace ktxcmp::ui {
 // UI-owned state that AppState has no business knowing about: a GL texture and
 // where the user has panned to. Constructed in main, passed by reference.
 struct UiState {
-    ImageTexture texture;
+    UiState();
+
+    // Owns the workers that turn float surfaces into display bytes.
+    DisplayCache display;
+
+    // One texture per level, at full resolution for the viewport and at
+    // thumbnail size for the strip. Keeping them means switching levels costs no
+    // upload at all after the first visit.
+    std::vector<std::unique_ptr<ImageTexture>> levelTextures;
+    std::vector<std::unique_ptr<ImageTexture>> thumbnails;
+
+    // Channel mask the textures were built for; a change rebuilds them.
+    std::uint32_t builtChannels = 0xFFFFFFFFu;
 
     float zoom = 1.0f;
     float panX = 0.0f;
@@ -58,7 +74,7 @@ void drawFrame(AppState& app, UiState& ui);
 void drawSourcesPanel(AppState& app);
 void drawViewportPanel(AppState& app, UiState& ui);
 void drawAnalysisPanel(AppState& app);
-void drawMipStripPanel(AppState& app);
+void drawMipStripPanel(AppState& app, UiState& ui);
 void drawStatusBar(AppState& app, UiState& ui);
 
 // Shared panel vocabulary.
@@ -69,6 +85,11 @@ ImVec4 errorColor();
 
 // "label            value", value right-aligned and dimmed when empty.
 void field(const char* label, const char* value);
+
+// One pending visual, used by every panel that can be waiting on a decode
+// (PLAN.md M3: decide it once and use it everywhere).
+void drawPendingIndicator(ImVec2 centre, float radius);
+void pendingHint(const char* what);
 
 // A boxed section with a title, used for the slot cards and the metric card.
 bool beginCard(const char* id, float height = 0.0f);
