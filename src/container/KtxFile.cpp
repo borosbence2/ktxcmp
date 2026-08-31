@@ -185,6 +185,16 @@ Result<KtxFile> KtxFile::open(const std::filesystem::path& path) {
                                 std::to_string(li.imageBytes) + " bytes but " +
                                 info.formatName + " at " + std::to_string(li.w) + "x" +
                                 std::to_string(li.h) + " requires " + std::to_string(expected));
+
+            // The check above compares two numbers derived from the same header,
+            // so a header that lies about its dimensions satisfies both. This one
+            // measures against the payload that is actually present.
+            if (li.byteOffset + li.imageBytes > info.dataSize)
+                return fail(ErrorCode::Malformed,
+                            "level " + std::to_string(level) + " needs " +
+                                std::to_string(li.byteOffset + li.imageBytes) +
+                                " bytes but the file holds " + std::to_string(info.dataSize) +
+                                "; the header's dimensions do not match its payload");
         }
         info.levels.push_back(li);
     }

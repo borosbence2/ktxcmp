@@ -15,12 +15,21 @@ No pixels are decoded yet; that is M2.
 Files arrive by `File > Open`, by drag-and-drop onto the window, or as command
 line arguments (which is what "Open With" delivers).
 
-`container_test` is a console harness that opens files and checks the M1
-invariants without needing a window:
+### Tests
+
+`container_test` is a console harness. It generates its own corpus with libktx's
+writer, so it needs nothing checked in and runs in CI on both platforms:
 
 ```
-build/bin/container_test <file>...
+ctest --test-dir build --output-on-failure
+build/bin/container_test --synthetic       # same thing, directly
+build/bin/container_test <file>...         # report on real files
 ```
+
+The corpus covers every supported format in both container versions, plus
+non-power-of-two and non-multiple-of-block-size dimensions, a short chain, an
+unsupported format, a non-container, a truncated file, and a header that lies
+about its dimensions.
 
 ## Build
 

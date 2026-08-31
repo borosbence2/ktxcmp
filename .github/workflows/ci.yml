@@ -35,6 +35,11 @@ jobs:
       - name: Build
         run: cmake --build build --config RelWithDebInfo --parallel
 
+      # The harness generates its own corpus, so this needs no checked-in
+      # textures and exercises the same checks a developer runs locally.
+      - name: Test
+        run: ctest --test-dir build --build-config RelWithDebInfo --output-on-failure
+
       - uses: actions/upload-artifact@v4
         with:
           name: ktxcmp-${{ matrix.name }}

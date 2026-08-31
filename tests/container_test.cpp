@@ -1,9 +1,12 @@
 // Container-layer harness. Hand-rolled rather than a framework (CLAUDE.md).
 //
-//   container_test <file>...
+//   container_test --synthetic [dir]   generate a corpus and check it
+//   container_test <file>...           report on and check real files
 //
-// Prints what the container layer made of each file and checks the invariants
-// that PLAN.md M1 asks for. Exit code is the number of failures.
+// The synthetic mode needs no committed binaries and no local textures, so CI
+// runs the same checks this machine does. Exit code is the number of failures.
+
+#include "Corpus.hpp"
 
 #include "container/KtxFile.hpp"
 
@@ -31,6 +34,38 @@ const char* versionName(ktxcmp::ContainerVersion v) {
     return v == ktxcmp::ContainerVersion::Ktx1 ? "KTX1" : "KTX2";
 }
 
+int expectedMipCount(int w, int h) {
+    int levels = 1;
+    for (int d = (w > h ? w : h); d > 1; d /= 2)
+        ++levels;
+    return levels;
+}
+
+// The invariants PLAN.md M1 asks for, checked against our own arithmetic rather
+// than against whatever libktx reported.
+void checkInvariants(const ktxcmp::KtxFile& file, const std::string& tag) {
+    const ktxcmp::KtxInfo& info = file.info();
+
+    bool dimsOk = true, sizesOk = true, bytesOk = true;
+    for (int level = 0; level < info.levelCount; ++level) {
+        const ktxcmp::LevelInfo& li = info.levels[static_cast<std::size_t>(level)];
+        const int ew = (info.baseWidth >> level) > 1 ? (info.baseWidth >> level) : 1;
+        const int eh = (info.baseHeight >> level) > 1 ? (info.baseHeight >> level) : 1;
+        if (li.w != ew || li.h != eh)
+            dimsOk = false;
+        if (li.imageBytes != info.format.imageBytes(li.w, li.h, li.d))
+            sizesOk = false;
+        auto bytes = file.levelBytes(level);
+        if (!bytes || bytes->size() != li.imageBytes)
+            bytesOk = false;
+    }
+    check(dimsOk, tag + ": levels follow max(1, base >> level)");
+    check(sizesOk, tag + ": level sizes match the format's block layout");
+    check(bytesOk, tag + ": level bytes are retrievable at the stated length");
+    check(!file.levelBytes(info.levelCount).has_value(), tag + ": level past the end is rejected");
+    check(!file.levelBytes(-1).has_value(), tag + ": negative level is rejected");
+}
+
 void report(const ktxcmp::KtxFile& file) {
     const ktxcmp::KtxInfo& info = file.info();
     std::printf("  container   %s\n", versionName(info.version));
@@ -49,50 +84,14 @@ void report(const ktxcmp::KtxFile& file) {
                 info.premultiplied.has_value() ? (*info.premultiplied ? "yes" : "no") : "unknown");
     std::printf("  data        %llu bytes\n", static_cast<unsigned long long>(info.dataSize));
 
-    // Expected chain length for a complete mip pyramid.
-    int expectedLevels = 1;
-    for (int d = (info.baseWidth > info.baseHeight ? info.baseWidth : info.baseHeight); d > 1;
-         d /= 2)
-        ++expectedLevels;
-
-    check(info.levelCount == expectedLevels,
+    const int expected = expectedMipCount(info.baseWidth, info.baseHeight);
+    check(info.levelCount == expected,
           "level count " + std::to_string(info.levelCount) + " matches the expected " +
-              std::to_string(expectedLevels) + " for " + std::to_string(info.baseWidth) + "x" +
-              std::to_string(info.baseHeight));
-
-    bool dimsOk = true;
-    bool sizesOk = true;
-    bool bytesOk = true;
-    for (int level = 0; level < info.levelCount; ++level) {
-        const ktxcmp::LevelInfo& li = info.levels[static_cast<std::size_t>(level)];
-        const int ew = info.baseWidth >> level > 1 ? info.baseWidth >> level : 1;
-        const int eh = info.baseHeight >> level > 1 ? info.baseHeight >> level : 1;
-        if (li.w != ew || li.h != eh)
-            dimsOk = false;
-        if (li.imageBytes != info.format.imageBytes(li.w, li.h, li.d))
-            sizesOk = false;
-
-        auto bytes = file.levelBytes(level);
-        if (!bytes || bytes->size() != li.imageBytes)
-            bytesOk = false;
-    }
-    check(dimsOk, "every level matches max(1, base >> level)");
-    check(sizesOk, "every level size matches the format's block layout");
-    check(bytesOk, "every level's bytes are retrievable at the stated length");
-
-    // Out-of-range access must be refused, not clamped.
-    check(!file.levelBytes(info.levelCount).has_value(), "level past the end is rejected");
-    check(!file.levelBytes(-1).has_value(), "negative level is rejected");
+              std::to_string(expected));
+    checkInvariants(file, "chain");
 }
 
-}  // namespace
-
-int main(int argc, char** argv) {
-    if (argc < 2) {
-        std::printf("usage: container_test <file>...\n");
-        return 2;
-    }
-
+int runRealFiles(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::filesystem::path path(argv[i]);
         std::printf("\n=== %s\n", path.filename().string().c_str());
@@ -106,8 +105,6 @@ int main(int argc, char** argv) {
         if (!opened) {
             std::printf("  rejected: [%s] %s\n", ktxcmp::categoryName(opened.error().code),
                         opened.error().message.c_str());
-            // Refusing a file that is not a KTX is the correct outcome, so it
-            // counts as a passing check rather than a failure.
             check(!shouldOpen, shouldOpen ? std::string("a .ktx file should have opened")
                                           : std::string("a non-KTX file is refused with a reason"));
             continue;
@@ -115,7 +112,81 @@ int main(int argc, char** argv) {
         check(shouldOpen, "opened a file that claims to be a KTX container");
         report(*opened);
     }
+    return g_failures;
+}
+
+int runSynthetic(const std::filesystem::path& dir) {
+    std::printf("generating corpus in %s\n", dir.string().c_str());
+    const auto expectations = ktxcmp::test::generateCorpus(dir);
+    if (expectations.empty()) {
+        std::printf("FAIL  the corpus generator produced nothing\n");
+        return 1;
+    }
+    std::printf("%zu files\n\n", expectations.size());
+
+    for (const auto& want : expectations) {
+        std::printf("--- %s\n", want.filename.c_str());
+        auto opened = ktxcmp::KtxFile::open(dir / want.filename);
+
+        if (!want.shouldOpen) {
+            if (opened) {
+                check(false, want.filename + " should have been rejected but opened as " +
+                                 opened->info().formatName);
+                continue;
+            }
+            const std::string message = opened.error().message;
+            std::printf("    rejected: %s\n", message.c_str());
+            if (want.messageContains.empty())
+                check(true, want.filename + " is rejected");
+            else
+                check(message.find(want.messageContains) != std::string::npos,
+                      want.filename + " rejection names \"" + want.messageContains + "\"");
+            continue;
+        }
+
+        if (!opened) {
+            check(false, want.filename + " should have opened but was rejected: " +
+                             opened.error().message);
+            continue;
+        }
+
+        const ktxcmp::KtxInfo& info = opened->info();
+        check(info.formatName == want.formatName,
+              want.filename + " is " + want.formatName + " (got " + info.formatName + ")");
+        check(info.baseWidth == want.width && info.baseHeight == want.height,
+              want.filename + " is " + std::to_string(want.width) + "x" +
+                  std::to_string(want.height));
+        check(info.levelCount == want.levelCount,
+              want.filename + " has " + std::to_string(want.levelCount) + " levels");
+        check(info.version == want.version,
+              want.filename + " is " + versionName(want.version));
+
+        // KTX1 cannot know this, and must not pretend otherwise (trap 9).
+        if (want.version == ktxcmp::ContainerVersion::Ktx1)
+            check(!info.hasDfd && !info.premultiplied.has_value(),
+                  want.filename + ": KTX1 reports no DFD and unknown premultiplied alpha");
+
+        checkInvariants(*opened, want.filename);
+    }
+    return g_failures;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    if (argc >= 2 && std::string(argv[1]) == "--synthetic") {
+        const std::filesystem::path dir =
+            argc >= 3 ? std::filesystem::path(argv[2])
+                      : std::filesystem::temp_directory_path() / "ktxcmp_corpus";
+        runSynthetic(dir);
+    } else if (argc >= 2) {
+        runRealFiles(argc, argv);
+    } else {
+        std::printf("usage: container_test --synthetic [dir]\n"
+                    "       container_test <file>...\n");
+        return 2;
+    }
 
     std::printf("\n%d checks, %d failed\n", g_checks, g_failures);
-    return g_failures;
+    return g_failures == 0 ? 0 : 1;
 }

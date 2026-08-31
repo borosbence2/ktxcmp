@@ -90,13 +90,16 @@ endif()
 # Hand-rolled harnesses, no framework (CLAUDE.md). They link the layer under
 # test directly, so they stay runnable without a window.
 
+enable_testing()
+
 add_executable(container_test
     tests/container_test.cpp
+    tests/Corpus.cpp
     src/core/Error.cpp
     src/container/FormatId.cpp
     src/container/KtxFile.cpp)
 
-target_include_directories(container_test PRIVATE src)
+target_include_directories(container_test PRIVATE src tests)
 target_compile_features(container_test PRIVATE cxx_std_23)
 target_link_libraries(container_test PRIVATE ktx)
 
@@ -105,3 +108,7 @@ if(MSVC)
 else()
     target_compile_options(container_test PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+# Generates its own corpus, so it needs nothing checked in and runs anywhere.
+add_test(NAME container
+         COMMAND container_test --synthetic "${CMAKE_CURRENT_BINARY_DIR}/corpus")
