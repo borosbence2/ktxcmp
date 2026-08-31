@@ -22,8 +22,6 @@ namespace ktxcmp {
 
 enum class CacheState { Missing, Pending, Ready, Failed };
 
-using SurfacePtr = std::shared_ptr<const Surface>;
-
 class ImageCache {
 public:
     explicit ImageCache(std::size_t budgetBytes) : m_budget(budgetBytes) {}

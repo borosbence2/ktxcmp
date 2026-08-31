@@ -6,6 +6,7 @@
 #include "ui/Ui.hpp"
 
 #include "app/AppState.hpp"
+#include "compare/ChainAnalysis.hpp"
 #include "compare/CompareEngine.hpp"
 #include "container/KtxFile.hpp"
 
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <memory>
+#include <vector>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -549,7 +551,7 @@ void drawCompareControls(AppState& app) {
     if (ImGui::Combo("##filter", &filter, kFilters, IM_ARRAYSIZE(kFilters)))
         v.filter = static_cast<Filter>(filter);
 
-    ImGui::Checkbox("Linear light", &v.linearLight);
+    ImGui::Checkbox("Linear light", &v.resampleLinearLight);
 }
 
 // Hero number, then the supporting rows. The full per-level table lives behind
@@ -628,13 +630,169 @@ void drawMetrics(AppState& app) {
     }
 }
 
-void drawErrorPlot() {
+// The chain report for the current settings, or nothing while it is still being
+// computed. Shared by the plot, the table and the strip badges so all three
+// agree about what they are showing.
+const ChainReport* currentChainReport(AppState& app) {
+    if (!app.chainAvailable())
+        return nullptr;
+    static ChainReport held;
+    auto report = app.chainAnalyser.result(app.chainToken());
+    if (!report || !*report)
+        return nullptr;
+    held = **report;
+    return &held;
+}
+
+// Error by level. You scan this; you do not read fifteen rows of numbers, which
+// is why the table is behind a toggle (PLAN.md, right rail).
+void drawErrorPlot(AppState& app, const ChainReport* report) {
     sectionLabel("Error by level");
-    // Tall enough to click points on (PLAN.md, right rail).
-    if (beginCard("##errorPlot", 132.0f)) {
-        centeredHint("no data");
+
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, viewportBgColor());
+    ImGui::BeginChild("##errorPlot", ImVec2(0.0f, 132.0f), ImGuiChildFlags_Borders,
+                      ImGuiWindowFlags_NoScrollbar);
+
+    if (app.view.compareMode == CompareMode::EncodeFidelity) {
+        centeredHint("mode 1 is one level");
+    } else if (report == nullptr) {
+        pendingHint("analysing");
+    } else {
+        struct Point {
+            int level;
+            float psnr;
+        };
+        std::vector<Point> points;
+        float lo = 1e9f, hi = -1e9f;
+        for (const LevelStats& level : report->levels) {
+            if (!level.hasMetrics || std::isinf(level.metrics.rgb.psnr))
+                continue;
+            const float v = static_cast<float>(level.metrics.rgb.psnr);
+            points.push_back(Point{level.level, v});
+            lo = std::min(lo, v);
+            hi = std::max(hi, v);
+        }
+
+        if (points.empty()) {
+            centeredHint("no comparable levels");
+        } else {
+            if (hi - lo < 1.0f) {
+                lo -= 1.0f;
+                hi += 1.0f;
+            }
+            const float pad = 6.0f;
+            const ImVec2 origin = ImGui::GetWindowPos();
+            const ImVec2 size = ImGui::GetWindowSize();
+            const float plotX0 = origin.x + pad + 24.0f;  // room for the axis labels
+            const float plotX1 = origin.x + size.x - pad;
+            const float plotY0 = origin.y + pad;
+            const float plotY1 = origin.y + size.y - pad;
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+
+            const ImU32 axis = ImGui::GetColorU32(ImGuiCol_Separator);
+            draw->AddLine(ImVec2(plotX0, plotY1), ImVec2(plotX1, plotY1), axis);
+            draw->AddLine(ImVec2(plotX0, plotY0), ImVec2(plotX0, plotY1), axis);
+
+            char label[32];
+            const ImU32 dim = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+            std::snprintf(label, sizeof(label), "%.0f", static_cast<double>(hi));
+            draw->AddText(ImVec2(origin.x + pad, plotY0 - 2.0f), dim, label);
+            std::snprintf(label, sizeof(label), "%.0f", static_cast<double>(lo));
+            draw->AddText(ImVec2(origin.x + pad, plotY1 - 13.0f), dim, label);
+
+            const int maxLevel =
+                report->levels.empty() ? 1 : static_cast<int>(report->levels.size()) - 1;
+            auto plotPos = [&](const Point& p) {
+                const float tx =
+                    maxLevel > 0 ? static_cast<float>(p.level) / static_cast<float>(maxLevel)
+                                 : 0.5f;
+                const float ty = (p.psnr - lo) / (hi - lo);
+                return ImVec2(plotX0 + tx * (plotX1 - plotX0), plotY1 - ty * (plotY1 - plotY0));
+            };
+
+            // The badge threshold, drawn so a spike is read against something.
+            if (app.errorBadgeThresholdDb > lo && app.errorBadgeThresholdDb < hi) {
+                const float ty = (app.errorBadgeThresholdDb - lo) / (hi - lo);
+                const float y = plotY1 - ty * (plotY1 - plotY0);
+                draw->AddLine(ImVec2(plotX0, y), ImVec2(plotX1, y),
+                              ImGui::GetColorU32(errorColor()), 1.0f);
+            }
+
+            const ImU32 lineColour = ImGui::GetColorU32(accentColor());
+            for (std::size_t i = 1; i < points.size(); ++i)
+                draw->AddLine(plotPos(points[i - 1]), plotPos(points[i]), lineColour, 1.5f);
+
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            const bool hovered = ImGui::IsWindowHovered();
+            for (const Point& p : points) {
+                const ImVec2 at = plotPos(p);
+                const bool selected = p.level == app.view.level;
+                const bool nearPoint = hovered && std::fabs(mouse.x - at.x) < 8.0f;
+                draw->AddCircleFilled(at, selected ? 4.5f : 3.0f,
+                                      selected ? ImGui::GetColorU32(ImGuiCol_Text) : lineColour);
+                // Clicking a point selects that level everywhere (PLAN.md M5).
+                if (nearPoint && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                    app.view.level = p.level;
+                if (nearPoint)
+                    ImGui::SetTooltip("level %d: %.2f dB", p.level, static_cast<double>(p.psnr));
+            }
+        }
     }
-    endCard();
+
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+}
+
+// The full table is not permanently on screen; it lives behind this toggle and
+// in the CSV export (PLAN.md, right rail).
+void drawLevelTable(AppState& app, const ChainReport* report) {
+    ImGui::Checkbox("Level table", &app.showLevelTable);
+    if (!app.showLevelTable || report == nullptr)
+        return;
+
+    if (ImGui::BeginTable("##levels", 3,
+                          ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("lvl");
+        ImGui::TableSetupColumn("PSNR");
+        ImGui::TableSetupColumn("SSIM");
+        ImGui::TableHeadersRow();
+        for (const LevelStats& level : report->levels) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            char id[24];
+            std::snprintf(id, sizeof(id), "%d##row%d", level.level, level.level);
+            if (ImGui::Selectable(id, app.view.level == level.level,
+                                  ImGuiSelectableFlags_SpanAllColumns))
+                app.view.level = level.level;
+            ImGui::TableNextColumn();
+            if (level.hasMetrics)
+                ImGui::TextUnformatted(formatPsnr(level.metrics.rgb.psnr).c_str());
+            else
+                ImGui::TextDisabled("%s", kEmptyValue);
+            ImGui::TableNextColumn();
+            if (level.hasMetrics)
+                ImGui::Text("%.4f", level.metrics.ssim);
+            else
+                ImGui::TextDisabled("%s", kEmptyValue);
+        }
+        ImGui::EndTable();
+    }
+
+    if (ImGui::Button("Export CSV"))
+        app.exportCsvRequested = true;
+}
+
+void drawChainWarnings(const ChainReport* report) {
+    if (report == nullptr || report->warnings.empty())
+        return;
+    ImGui::PushStyleColor(ImGuiCol_Text, errorColor());
+    for (const ChainWarning& w : report->warnings) {
+        if (w.level < 0)
+            ImGui::TextWrapped("chain: %s", w.message.c_str());
+        else
+            ImGui::TextWrapped("level %d %s", w.level, w.message.c_str());
+    }
+    ImGui::PopStyleColor();
 }
 
 }  // namespace
@@ -672,7 +830,11 @@ void drawAnalysisPanel(AppState& app) {
         ImGui::Spacing();
         drawMetrics(app);
         ImGui::Spacing();
-        drawErrorPlot();
+        const ChainReport* report = currentChainReport(app);
+        drawErrorPlot(app, report);
+        ImGui::Spacing();
+        drawLevelTable(app, report);
+        drawChainWarnings(report);
     }
     ImGui::End();
 }
@@ -721,6 +883,11 @@ void drawMipStripPanel(AppState& app, UiState& ui) {
         }
 
         drawSubresourceSelectors(app);
+
+        // Warnings live on the thumbnails, not in a separate problems panel: the
+        // strip is already the navigation, so one glance shows which level to
+        // look at (PLAN.md, bottom).
+        const ChainReport* report = currentChainReport(app);
 
         const KtxInfo& info = app.slotA.ktx->info();
         const int levels = info.levelCount;
@@ -804,11 +971,43 @@ void drawMipStripPanel(AppState& app, UiState& ui) {
 
             draw->AddText(ImVec2(cellPos.x + (cellSize.x - capSize.x) * 0.5f, capY),
                           ImGui::GetColorU32(ImGuiCol_Text), caption);
+
+            // A badge if this level was flagged, or if its error crossed the
+            // threshold. One mark, whichever the reason; the tooltip says which.
+            std::string badgeReason;
+            if (report != nullptr) {
+                for (const ChainWarning& w : report->warnings)
+                    if (w.level == level)
+                        badgeReason += (badgeReason.empty() ? "" : "\n") + w.message;
+                const std::size_t index = static_cast<std::size_t>(level);
+                if (index < report->levels.size()) {
+                    const LevelStats& stats = report->levels[index];
+                    if (stats.hasMetrics && !std::isinf(stats.metrics.rgb.psnr) &&
+                        stats.metrics.rgb.psnr < app.errorBadgeThresholdDb) {
+                        char msg[96];
+                        std::snprintf(msg, sizeof(msg), "PSNR %.2f dB is below the %.0f dB threshold",
+                                      stats.metrics.rgb.psnr,
+                                      static_cast<double>(app.errorBadgeThresholdDb));
+                        badgeReason += (badgeReason.empty() ? "" : "\n");
+                        badgeReason += msg;
+                    }
+                }
+            }
+            if (!badgeReason.empty()) {
+                const float r = 5.0f * app.uiScale;
+                const ImVec2 at(cellPos.x + cellSize.x - r - 4.0f, cellPos.y + r + 4.0f);
+                draw->AddCircleFilled(at, r, ImGui::GetColorU32(errorColor()));
+            }
             ImGui::EndGroup();
 
-            if (hovered)
-                ImGui::SetTooltip("level %d: %dx%d, %s", level, li.w, li.h,
-                                  byteSizeText(li.imageBytes).c_str());
+            if (hovered) {
+                if (badgeReason.empty())
+                    ImGui::SetTooltip("level %d: %dx%d, %s", level, li.w, li.h,
+                                      byteSizeText(li.imageBytes).c_str());
+                else
+                    ImGui::SetTooltip("level %d: %dx%d, %s\n%s", level, li.w, li.h,
+                                      byteSizeText(li.imageBytes).c_str(), badgeReason.c_str());
+            }
         }
         ImGui::EndChild();
     }

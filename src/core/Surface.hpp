@@ -12,6 +12,7 @@
 #include "container/FormatId.hpp"
 
 #include <cstddef>
+#include <memory>
 #include <vector>
 
 namespace ktxcmp {
@@ -42,5 +43,10 @@ struct Surface {
     }
     [[nodiscard]] float* at(int x, int y, int z = 0) { return rgba.data() + indexOf(x, y, z); }
 };
+
+// Surfaces are shared: the cache hands one out while a panel draws it and a
+// worker may still hold it, so ownership is counted rather than owned in one
+// place.
+using SurfacePtr = std::shared_ptr<const Surface>;
 
 }  // namespace ktxcmp

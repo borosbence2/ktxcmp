@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 #include "app/AppState.hpp"
@@ -57,6 +58,23 @@ void SDLCALL onFilesChosen(void* userdata, const char* const* filelist, int /*fi
         return;  // cancelled, or the dialog failed
     for (const char* const* it = filelist; *it != nullptr; ++it)
         app->enqueueOpen(fromUtf8(*it));
+}
+
+void SDLCALL onCsvDestinationChosen(void* userdata, const char* const* filelist, int) {
+    auto* app = static_cast<ktxcmp::AppState*>(userdata);
+    if (app == nullptr || filelist == nullptr || *filelist == nullptr)
+        return;  // cancelled
+    const std::string csv = app->buildCsv();
+    if (csv.empty())
+        return;
+    std::ofstream out(fromUtf8(*filelist), std::ios::binary);
+    out.write(csv.data(), static_cast<std::streamsize>(csv.size()));
+}
+
+void showSaveCsvDialog(SDL_Window* window, ktxcmp::AppState& app) {
+    static const SDL_DialogFileFilter filters[] = {{"CSV", "csv"}};
+    SDL_ShowSaveFileDialog(onCsvDestinationChosen, &app, window, filters, SDL_arraysize(filters),
+                           nullptr);
 }
 
 void showOpenDialog(SDL_Window* window, ktxcmp::AppState& app) {
@@ -188,6 +206,12 @@ int main(int argc, char** argv) {
         const int levelBefore = app.view.level;
         app.requestVisible();
         app.requestCompare();
+        app.requestChain();
+
+        if (app.exportCsvRequested) {
+            app.exportCsvRequested = false;
+            showSaveCsvDialog(window, app);
+        }
         if (app.view.level != levelBefore)
             uiState.fitRequested = true;
 

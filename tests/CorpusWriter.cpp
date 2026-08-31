@@ -9,6 +9,7 @@
 
 #include <ktx.h>
 
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -109,6 +110,83 @@ bool writeAstcRoundTrip(const std::filesystem::path& path, int w, int h) {
     return rc == KTX_SUCCESS;
 }
 
+float srgbToLinearF(float v) {
+    return v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f);
+}
+
+float linearToSrgbF(float v) {
+    return v <= 0.0031308f ? v * 12.92f : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
+}
+
+// A black-and-white checkerboard with a full mip chain built either the wrong
+// way (averaging sRGB values directly) or the right way (averaging in linear
+// light). The two differ by about sixty units at every level below the base.
+bool writeCheckerChain(const std::filesystem::path& path, int size, bool linearLight) {
+    int levels = 1;
+    for (int d = size; d > 1; d /= 2)
+        ++levels;
+
+    ktxTextureCreateInfo ci = makeInfo(size, size, levels);
+    ci.vkFormat = kVkRgba8Srgb;
+    ktxTexture2* t = nullptr;
+    if (ktxTexture2_Create(&ci, KTX_TEXTURE_CREATE_ALLOC_STORAGE, &t) != KTX_SUCCESS)
+        return false;
+
+    std::vector<std::uint8_t> level(static_cast<std::size_t>(size) * size * 4);
+    for (int y = 0; y < size; ++y)
+        for (int x = 0; x < size; ++x) {
+            std::uint8_t* p = level.data() + (static_cast<std::size_t>(y) * size + x) * 4;
+            const std::uint8_t v = ((x + y) % 2 == 0) ? 255 : 0;
+            p[0] = p[1] = p[2] = v;
+            p[3] = 255;
+        }
+
+    int w = size, h = size;
+    for (int i = 0; i < levels; ++i) {
+        ktx_size_t offset = 0;
+        if (ktxTexture_GetImageOffset(ktxTexture(t), static_cast<ktx_uint32_t>(i), 0, 0,
+                                      &offset) != KTX_SUCCESS) {
+            ktxTexture_Destroy(ktxTexture(t));
+            return false;
+        }
+        std::memcpy(ktxTexture_GetData(ktxTexture(t)) + offset, level.data(), level.size());
+
+        if (w == 1 && h == 1)
+            break;
+        const int nw = w > 1 ? w / 2 : 1;
+        const int nh = h > 1 ? h / 2 : 1;
+        std::vector<std::uint8_t> next(static_cast<std::size_t>(nw) * nh * 4);
+        for (int y = 0; y < nh; ++y)
+            for (int x = 0; x < nw; ++x)
+                for (int c = 0; c < 4; ++c) {
+                    const int x0 = (w > 1) ? x * 2 : 0, x1 = (w > 1) ? x0 + 1 : x0;
+                    const int y0 = (h > 1) ? y * 2 : 0, y1 = (h > 1) ? y0 + 1 : y0;
+                    const std::uint8_t s0 = level[(static_cast<std::size_t>(y0) * w + x0) * 4 + c];
+                    const std::uint8_t s1 = level[(static_cast<std::size_t>(y0) * w + x1) * 4 + c];
+                    const std::uint8_t s2 = level[(static_cast<std::size_t>(y1) * w + x0) * 4 + c];
+                    const std::uint8_t s3 = level[(static_cast<std::size_t>(y1) * w + x1) * 4 + c];
+                    float avg;
+                    if (linearLight && c < 3) {
+                        avg = (srgbToLinearF(s0 / 255.0f) + srgbToLinearF(s1 / 255.0f) +
+                               srgbToLinearF(s2 / 255.0f) + srgbToLinearF(s3 / 255.0f)) /
+                              4.0f;
+                        avg = linearToSrgbF(avg);
+                    } else {
+                        avg = (s0 + s1 + s2 + s3) / 4.0f / 255.0f;
+                    }
+                    next[(static_cast<std::size_t>(y) * nw + x) * 4 + c] =
+                        static_cast<std::uint8_t>(avg * 255.0f + 0.5f);
+                }
+        level.swap(next);
+        w = nw;
+        h = nh;
+    }
+
+    const KTX_error_code rc = ktxTexture_WriteToNamedFile(ktxTexture(t), path.string().c_str());
+    ktxTexture_Destroy(ktxTexture(t));
+    return rc == KTX_SUCCESS;
+}
+
 std::vector<std::uint8_t> readAll(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
     return std::vector<std::uint8_t>((std::istreambuf_iterator<char>(in)),
@@ -195,6 +273,11 @@ bool writeFixtures(const std::filesystem::path& dir) {
             return false;
 
     if (!writePngFixtures(dir))
+        return false;
+
+    if (!writeCheckerChain(dir / kGammaMipsFixture, kCheckerSize, false))
+        return false;
+    if (!writeCheckerChain(dir / kLinearMipsFixture, kCheckerSize, true))
         return false;
 
     // Every file the spec promises must now exist, or the two have drifted.

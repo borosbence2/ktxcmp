@@ -53,6 +53,13 @@ struct PngFixture {
 [[nodiscard]] std::vector<AstcFixture> astcFixtures();
 [[nodiscard]] std::vector<PngFixture> pngFixtures();
 
+// A checkerboard whose mips were built by averaging sRGB values directly, which
+// is the classic mistake. Mode 3 with linear-light resampling should light up on
+// it, and turning that off should collapse the error (PLAN.md M5).
+inline constexpr const char* kGammaMipsFixture = "gamma_mips_checker_64.ktx2";
+inline constexpr const char* kLinearMipsFixture = "linear_mips_checker_64.ktx2";
+inline constexpr int kCheckerSize = 64;
+
 // The 16-bit fixture stores values that collide if either byte is dropped, so a
 // truncating loader cannot pass (CLAUDE.md, trap 5).
 [[nodiscard]] std::vector<std::uint16_t> gradient16(int w, int h);

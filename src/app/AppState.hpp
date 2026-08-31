@@ -4,7 +4,10 @@
 // singletons (CLAUDE.md, Conventions).
 
 #include "cache/ImageCache.hpp"
+#include "compare/CompareMode.hpp"
+#include "compare/ChainService.hpp"
 #include "compare/CompareService.hpp"
+#include "compare/Resampler.hpp"
 #include "container/KtxFile.hpp"
 #include "core/Error.hpp"
 #include "core/Subresource.hpp"
@@ -13,6 +16,7 @@
 #include "decode/PngLoader.hpp"
 
 #include <filesystem>
+#include <string>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -22,16 +26,6 @@ namespace ktxcmp {
 
 // The view-mode row above the viewport.
 enum class ViewMode { A, B, Diff, Split, Onion };
-
-// CLAUDE.md, Compare modes.
-enum class CompareMode {
-    EncodeFidelity,    // 1: KTX mip 0 vs reference, no resampling
-    ChainVsReference,  // 2: reference downsampled to each level
-    SelfConsistency,   // 3: KTX level N-1 downsampled x2 vs level N
-};
-
-// Resampling kernel for compare modes 2 and 3 (PLAN.md M5).
-enum class Filter { Box, Triangle, Kaiser, Lanczos3, Mitchell };
 
 struct ChannelMask {
     bool r = true, g = true, b = true, a = true;
@@ -53,8 +47,18 @@ struct ViewState {
     float onionBlend = 0.5f;  // 0..1
 
     // Modes 2 and 3 only. Both must appear in every table and export.
-    Filter filter      = Filter::Lanczos3;
-    bool   linearLight = true;
+    Filter filter = Filter::Lanczos3;
+
+    // Two toggles with deliberately opposite defaults, which is easy to get
+    // wrong by having only one of them.
+    //
+    //   resampleLinearLight: filter colour in linear light. On, because that is
+    //     the correct way to downsample colour (PLAN.md M5).
+    //   metricLinearLight: compute PSNR on linear values rather than
+    //     sRGB-encoded ones. Off, because CLAUDE.md defines the metric on
+    //     sRGB-encoded values and requires the toggle to be labelled.
+    bool resampleLinearLight = true;
+    bool metricLinearLight = false;
 };
 
 // One loaded file, or one failed attempt at loading a file. A failure keeps its
@@ -92,6 +96,7 @@ public:
     ImageCache cache;
     DecodeService decoder;
     CompareService comparer;
+    ChainService chainAnalyser;
 
     float uiScale = 1.0f;  // display content scale, applied to layout constants
     bool  running = true;
@@ -129,6 +134,19 @@ public:
     [[nodiscard]] std::uint64_t compareToken() const { return m_compareToken; }
     [[nodiscard]] bool compareAvailable() const { return m_compareAvailable; }
 
+    // Modes 2 and 3. Needs every level decoded, so it waits for the cache.
+    void requestChain();
+    [[nodiscard]] std::uint64_t chainToken() const { return m_chainToken; }
+    [[nodiscard]] bool chainAvailable() const { return m_chainAvailable; }
+
+    // Levels exceeding this PSNR-based threshold get a badge on the strip.
+    float errorBadgeThresholdDb = 35.0f;
+    bool showLevelTable = false;
+
+    // Written by the UI when the user asks for one; main turns it into a dialog.
+    bool exportCsvRequested = false;
+    [[nodiscard]] std::string buildCsv() const;
+
     // Asks for what the UI is about to draw: the selected subresource first,
     // then every level for the mip strip. Cheap to call every frame - the cache
     // rejects anything already present or in flight.
@@ -154,6 +172,8 @@ private:
     std::vector<PendingOpen> m_pending;
     std::uint64_t m_compareToken = 0;
     bool m_compareAvailable = false;
+    std::uint64_t m_chainToken = 0;
+    bool m_chainAvailable = false;
 };
 
 }  // namespace ktxcmp

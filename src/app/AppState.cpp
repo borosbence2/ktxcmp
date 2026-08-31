@@ -142,9 +142,59 @@ void AppState::requestCompare() {
     // The token has to change whenever anything the answer depends on changes.
     m_compareToken = (cache.generation(Slot::A) * 1000003ull) ^
                      (reinterpret_cast<std::uintptr_t>(slotB.reference.get()) * 31ull) ^
-                     (view.linearLight ? 0x5bf03635ull : 0ull);
+                     (view.metricLinearLight ? 0x5bf03635ull : 0ull);
     m_compareAvailable = true;
-    comparer.request(m_compareToken, a, slotB.reference, view.linearLight);
+    comparer.request(m_compareToken, a, slotB.reference, view.metricLinearLight);
+}
+
+void AppState::requestChain() {
+    m_chainAvailable = false;
+    if (view.compareMode == CompareMode::EncodeFidelity)
+        return;
+    if (!slotA.loaded())
+        return;
+    if (view.compareMode == CompareMode::ChainVsReference && !slotB.isReference())
+        return;
+
+    // Every level has to be decoded before the chain can be analysed. They are
+    // already being requested for the strip, so this just waits for them.
+    const KtxInfo& info = slotA.ktx->info();
+    ChainInput input;
+    input.levels.reserve(static_cast<std::size_t>(info.levelCount));
+    for (int level = 0; level < info.levelCount; ++level) {
+        SurfacePtr s = cache.get(SubresourceKey{Slot::A, level, view.layer, view.face});
+        if (!s)
+            return;  // still decoding; the panel shows the pending state
+        input.levels.push_back(std::move(s));
+    }
+
+    input.reference = view.compareMode == CompareMode::ChainVsReference ? slotB.reference : nullptr;
+    input.mode = view.compareMode;
+    input.filter = view.filter;
+    input.resampleLinearLight = view.resampleLinearLight;
+    input.metricLinearLight = view.metricLinearLight;
+
+    // Anything that changes the answer has to change the token.
+    m_chainToken = (cache.generation(Slot::A) * 2654435761ull) ^
+                   (static_cast<std::uint64_t>(view.compareMode) * 7919ull) ^
+                   (static_cast<std::uint64_t>(view.filter) * 104729ull) ^
+                   (view.resampleLinearLight ? 0x1000ull : 0ull) ^
+                   (view.metricLinearLight ? 0x2000ull : 0ull) ^
+                   (reinterpret_cast<std::uintptr_t>(input.reference.get()) * 31ull) ^
+                   (static_cast<std::uint64_t>(view.layer) << 20) ^
+                   (static_cast<std::uint64_t>(view.face) << 28);
+    m_chainAvailable = true;
+    chainAnalyser.request(m_chainToken, std::move(input));
+}
+
+std::string AppState::buildCsv() const {
+    if (!m_chainAvailable)
+        return {};
+    auto report = chainAnalyser.result(m_chainToken);
+    if (!report || !*report)
+        return {};
+    return toCsv(**report, slotA.path.string(),
+                 slotB.occupied() ? slotB.path.string() : std::string("(none)"));
 }
 
 void AppState::clampSelection() {
