@@ -9,6 +9,7 @@
 #include <imgui_impl_opengl3.h>
 #include <imgui_impl_sdl3.h>
 
+#include <filesystem>
 #include <string>
 
 #include "app/AppState.hpp"
@@ -43,6 +44,29 @@ void reportFatal(const char* what) {
     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "ktxcmp", what, nullptr);
 }
 
+// SDL hands back UTF-8. Constructing a path from char* would reinterpret it in
+// the local code page on Windows, which mangles any non-ASCII directory name.
+std::filesystem::path fromUtf8(const char* s) {
+    return std::filesystem::path(reinterpret_cast<const char8_t*>(s));
+}
+
+void SDLCALL onFilesChosen(void* userdata, const char* const* filelist, int /*filter*/) {
+    auto* app = static_cast<ktxcmp::AppState*>(userdata);
+    if (app == nullptr || filelist == nullptr || *filelist == nullptr)
+        return;  // cancelled, or the dialog failed
+    for (const char* const* it = filelist; *it != nullptr; ++it)
+        app->enqueueOpen(fromUtf8(*it));
+}
+
+void showOpenDialog(SDL_Window* window, ktxcmp::AppState& app) {
+    static const SDL_DialogFileFilter filters[] = {
+        {"KTX textures", "ktx2;ktx"},
+        {"All files", "*"},
+    };
+    SDL_ShowOpenFileDialog(onFilesChosen, &app, window, filters, SDL_arraysize(filters),
+                           nullptr, false);
+}
+
 float displayScale() {
     const float scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
     return scale > 0.0f ? scale : 1.0f;
@@ -50,7 +74,7 @@ float displayScale() {
 
 }  // namespace
 
-int main(int, char**) {
+int main(int argc, char** argv) {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         reportFatal("SDL_Init failed");
         return 1;
@@ -113,6 +137,12 @@ int main(int, char**) {
     ktxcmp::AppState app;
     app.uiScale = scale;
 
+    // Files named on the command line. This is what "Open With" and dropping a
+    // file on the executable deliver, which M8 wants for Finder too. It is not a
+    // batch CLI: there is no processing here, only a file to show.
+    for (int i = 1; i < argc; ++i)
+        app.enqueueOpen(fromUtf8(argv[i]));
+
     SDL_ShowWindow(window);
 
     while (app.running) {
@@ -124,7 +154,15 @@ int main(int, char**) {
             if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
                 event.window.windowID == SDL_GetWindowID(window))
                 app.running = false;
+            if (event.type == SDL_EVENT_DROP_FILE && event.drop.data != nullptr)
+                app.enqueueOpen(fromUtf8(event.drop.data));
         }
+
+        if (app.openDialogRequested) {
+            app.openDialogRequested = false;
+            showOpenDialog(window, app);
+        }
+        app.processPendingOpens();
 
         if (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED) {
             SDL_Delay(10);

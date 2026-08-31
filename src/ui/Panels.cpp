@@ -1,14 +1,18 @@
-// The four dock panels. M0 renders the layout and its empty state only: no
-// panel reads a file, a surface, or a metric, because none of that exists yet.
+// The four dock panels.
+//
+// M1: the source cards, the format banner and the mip strip read real container
+// metadata. Nothing here decodes a texel, so the viewport is still empty.
 
 #include "ui/Ui.hpp"
 
 #include "app/AppState.hpp"
+#include "container/KtxFile.hpp"
 
 #include <imgui.h>
 
 #include <cfloat>
 #include <cstdio>
+#include <string>
 
 namespace ktxcmp::ui {
 namespace {
@@ -55,12 +59,43 @@ void sectionLabel(const char* text) {
     ImGui::TextDisabled("%s", text);
 }
 
+std::string dimsText(int w, int h) {
+    return std::to_string(w) + "x" + std::to_string(h);
+}
+
+std::string byteSizeText(std::uint64_t bytes) {
+    char buf[48];
+    if (bytes >= 1024ull * 1024ull)
+        std::snprintf(buf, sizeof(buf), "%.1f MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
+    else if (bytes >= 1024ull)
+        std::snprintf(buf, sizeof(buf), "%.1f kB", static_cast<double>(bytes) / 1024.0);
+    else
+        std::snprintf(buf, sizeof(buf), "%llu B", static_cast<unsigned long long>(bytes));
+    return buf;
+}
+
+// Describes what the container actually told us, without inventing a value for
+// anything it could not tell us (CLAUDE.md, trap 9).
+std::string flagsText(const KtxInfo& info) {
+    std::string out = info.format.transferFn == TransferFn::Srgb ? "sRGB" : "linear";
+    if (!info.hasDfd)
+        return out + ", no DFD";
+    if (info.premultiplied.has_value())
+        out += *info.premultiplied ? ", premultiplied" : ", straight alpha";
+    return out;
+}
+
 // ---------------------------------------------------------------- slots ----
 
-void drawSlotA(const SlotState& slot) {
-    (void)slot;
-    sectionLabel("SLOT A");
-    if (beginCard("##slotA")) {
+void drawSlotBody(const SlotState& slot) {
+    if (slot.failed()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, errorColor());
+        ImGui::TextWrapped("%s", categoryName(slot.error->code));
+        ImGui::PopStyleColor();
+        ImGui::TextWrapped("%s", slot.error->message.c_str());
+        return;
+    }
+    if (!slot.loaded()) {
         ImGui::TextDisabled("no file");
         ImGui::Separator();
         field("format", kEmptyValue);
@@ -70,12 +105,36 @@ void drawSlotA(const SlotState& slot) {
         field("faces", kEmptyValue);
         field("supercomp", kEmptyValue);
         field("flags", kEmptyValue);
+        return;
     }
+
+    const KtxInfo& info = slot.ktx->info();
+    ImGui::TextWrapped("%s", slot.path.filename().string().c_str());
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", slot.path.string().c_str());
+    ImGui::Separator();
+
+    field("format", info.formatName.c_str());
+    field("size", dimsText(info.baseWidth, info.baseHeight).c_str());
+    field("levels", std::to_string(info.levelCount).c_str());
+    field("layers", std::to_string(info.layerCount).c_str());
+    field("faces", std::to_string(info.faceCount).c_str());
+    field("supercomp", supercompressionName(info.supercompression));
+    field("container", info.version == ContainerVersion::Ktx1 ? "KTX1" : "KTX2");
+    field("flags", flagsText(info).c_str());
+    field("bytes", byteSizeText(info.dataSize).c_str());
+    if (info.needsTranscoding)
+        ImGui::TextDisabled("needs transcode");
+}
+
+void drawSlotA(const SlotState& slot) {
+    sectionLabel("SLOT A");
+    if (beginCard("##slotA"))
+        drawSlotBody(slot);
     endCard();
 }
 
 void drawSlotB(const SlotState& slot, bool unused) {
-    (void)slot;
     if (unused)
         pushGrayscale();
 
@@ -88,11 +147,15 @@ void drawSlotB(const SlotState& slot, bool unused) {
     }
 
     if (beginCard("##slotB")) {
-        ImGui::TextDisabled("no file");
-        ImGui::Separator();
-        field("format", kEmptyValue);
-        field("size", kEmptyValue);
-        field("chain", kEmptyValue);
+        if (slot.loaded() || slot.failed()) {
+            drawSlotBody(slot);
+        } else {
+            ImGui::TextDisabled("no file");
+            ImGui::Separator();
+            field("format", kEmptyValue);
+            field("size", kEmptyValue);
+            field("chain", kEmptyValue);
+        }
     }
     endCard();
 
@@ -102,7 +165,7 @@ void drawSlotB(const SlotState& slot, bool unused) {
 
 void drawDropTarget() {
     if (beginCard("##drop", ImGui::GetFrameHeight() * 2.2f)) {
-        centeredHint("Drop files here");
+        centeredHint("Drop .ktx / .ktx2");
     }
     endCard();
 }
@@ -126,15 +189,23 @@ void drawViewportBody(const AppState& app, float height) {
     ImGui::BeginChild("##viewportBody", ImVec2(0.0f, height), ImGuiChildFlags_Borders,
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-    centeredHint("No image loaded");
+    const SlotState& slot = app.slotA;
+    centeredHint(slot.loaded() ? "Decoding arrives at M2" : "No image loaded");
 
     const ImVec2 pos = ImGui::GetWindowPos();
     const ImVec2 size = ImGui::GetWindowSize();
     const float pad = ImGui::GetStyle().FramePadding.x + 2.0f;
 
-    char overlay[96];
+    std::string dims = kEmptyValue;
+    if (slot.loaded()) {
+        const KtxInfo& info = slot.ktx->info();
+        const int level = app.view.level < info.levelCount ? app.view.level : 0;
+        dims = dimsText(info.levels[static_cast<std::size_t>(level)].w,
+                        info.levels[static_cast<std::size_t>(level)].h);
+    }
+    char overlay[128];
     std::snprintf(overlay, sizeof(overlay), "%s | mip %d | %s",
-                  viewModeName(app.view.viewMode), app.view.level, kEmptyValue);
+                  viewModeName(app.view.viewMode), app.view.level, dims.c_str());
     ImGui::SetCursorScreenPos(ImVec2(pos.x + pad, pos.y + pad));
     ImGui::TextDisabled("%s", overlay);
 
@@ -202,17 +273,26 @@ void drawControlRow(AppState& app) {
 
 // ------------------------------------------------------------- analysis ----
 
-void drawFormatBanner() {
+void drawFormatBanner(const AppState& app) {
     // Accent, not warning: successful auto-detection is normal operation.
     const ImVec4 accent = accentColor();
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(accent.x, accent.y, accent.z, 0.22f));
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(accent.x, accent.y, accent.z, 0.70f));
     if (beginCard("##formatBanner")) {
         // Wrapped, not clipped: real format strings are longer than the rail.
-        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
-        ImGui::TextWrapped("no file");
-        ImGui::TextWrapped("no interpretation yet");
-        ImGui::PopStyleColor();
+        if (app.slotA.loaded()) {
+            const KtxInfo& info = app.slotA.ktx->info();
+            ImGui::TextWrapped("%s", info.formatName.c_str());
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+            ImGui::TextWrapped("%s, %s", info.version == ContainerVersion::Ktx1 ? "KTX1" : "KTX2",
+                               info.hasDfd ? "DFD present" : "no DFD");
+            ImGui::PopStyleColor();
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+            ImGui::TextWrapped("no file");
+            ImGui::TextWrapped("no interpretation yet");
+            ImGui::PopStyleColor();
+        }
     }
     endCard();
     ImGui::PopStyleColor(2);
@@ -296,7 +376,7 @@ void drawViewportPanel(AppState& app) {
 
 void drawAnalysisPanel(AppState& app) {
     if (ImGui::Begin(kWinAnalysis)) {
-        drawFormatBanner();
+        drawFormatBanner(app);
         ImGui::Spacing();
         drawCompareControls(app);
         ImGui::Spacing();
@@ -308,13 +388,36 @@ void drawAnalysisPanel(AppState& app) {
 }
 
 void drawMipStripPanel(AppState& app) {
-    (void)app;
     if (ImGui::Begin(kWinMipStrip)) {
-        // Warning badges live on these thumbnails, not in a separate panel.
-        if (beginCard("##mipStrip")) {
-            centeredHint("No mip levels");
+        if (!app.slotA.loaded()) {
+            if (beginCard("##mipStrip"))
+                centeredHint("No mip levels");
+            endCard();
+        } else {
+            // Thumbnails and warning badges arrive at M3/M5; the strip is already
+            // the navigation, so the levels are selectable now.
+            const KtxInfo& info = app.slotA.ktx->info();
+            const float cellW = 84.0f * app.uiScale;
+            const float cellH = ImGui::GetContentRegionAvail().y - ImGui::GetStyle().ScrollbarSize;
+            ImGui::BeginChild("##mipStrip", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
+                              ImGuiWindowFlags_HorizontalScrollbar);
+            for (int level = 0; level < info.levelCount; ++level) {
+                const LevelInfo& li = info.levels[static_cast<std::size_t>(level)];
+                if (level > 0)
+                    ImGui::SameLine();
+                ImGui::BeginGroup();
+                char label[64];
+                std::snprintf(label, sizeof(label), "%d\n%dx%d##lvl%d", level, li.w, li.h, level);
+                if (toggleButton(label, app.view.level == level,
+                                 ImVec2(cellW, cellH > 0.0f ? cellH : 0.0f)))
+                    app.view.level = level;
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("level %d: %dx%d, %s", level, li.w, li.h,
+                                      byteSizeText(li.imageBytes).c_str());
+                ImGui::EndGroup();
+            }
+            ImGui::EndChild();
         }
-        endCard();
     }
     ImGui::End();
 }

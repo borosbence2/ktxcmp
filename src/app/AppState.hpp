@@ -2,11 +2,14 @@
 
 // Application state. Constructed in main and passed by reference; there are no
 // singletons (CLAUDE.md, Conventions).
-//
-// M0 declares the selection vocabulary the panels need in order to lay
-// themselves out. Nothing here is populated from a file yet.
+
+#include "container/KtxFile.hpp"
+#include "core/Error.hpp"
 
 #include <filesystem>
+#include <mutex>
+#include <optional>
+#include <vector>
 
 namespace ktxcmp {
 
@@ -49,13 +52,24 @@ struct ViewState {
     bool   linearLight = true;
 };
 
-// One loaded file. M0 holds no pixels; panels render the empty state.
+// One loaded file, or one failed attempt at loading a file. A failure keeps its
+// message: an empty slot and a rejected slot are not the same state.
 struct SlotState {
     std::filesystem::path path;
-    bool loaded = false;
+    std::optional<KtxFile> ktx;
+    std::optional<Error> error;
+
+    [[nodiscard]] bool loaded() const { return ktx.has_value(); }
+    [[nodiscard]] bool failed() const { return error.has_value(); }
+    void clear() {
+        path.clear();
+        ktx.reset();
+        error.reset();
+    }
 };
 
-struct AppState {
+class AppState {
+public:
     SlotState slotA;
     SlotState slotB;
     ViewState view;
@@ -63,6 +77,26 @@ struct AppState {
     float uiScale = 1.0f;  // display content scale, applied to layout constants
     bool  running = true;
     bool  resetLayout = false;
+
+    // Set by the UI, acted on by main: keeps SDL out of the panel code.
+    bool openDialogRequested = false;
+
+    // Callable from any thread. SDL's dialog callback is not promised to run on
+    // the main one, and a drop event does run on it, so both go through here and
+    // are drained where loading is safe.
+    void enqueueOpen(std::filesystem::path path);
+    void processPendingOpens();
+
+    void loadIntoSlot(Slot slot, const std::filesystem::path& path);
+
+    [[nodiscard]] SlotState& slot(Slot which) { return which == Slot::A ? slotA : slotB; }
+    [[nodiscard]] const SlotState& slot(Slot which) const {
+        return which == Slot::A ? slotA : slotB;
+    }
+
+private:
+    std::mutex m_pendingMutex;
+    std::vector<std::filesystem::path> m_pending;
 };
 
 }  // namespace ktxcmp

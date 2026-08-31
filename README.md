@@ -8,9 +8,19 @@ and [PLAN.md](PLAN.md) for the milestone order and the UI specification.
 
 ## Status
 
-**M0 — skeleton.** The window opens, the panels dock, and the layout persists.
-Nothing reads a file yet: every panel renders its empty state. M1 adds the KTX2
-container layer.
+**M1 — container layer.** Opens `.ktx2` and `.ktx`, reports format, dimensions,
+level chain, supercompression and DFD state, and lets you step the mip levels.
+No pixels are decoded yet; that is M2.
+
+Files arrive by `File > Open`, by drag-and-drop onto the window, or as command
+line arguments (which is what "Open With" delivers).
+
+`container_test` is a console harness that opens files and checks the M1
+invariants without needing a window:
+
+```
+build/bin/container_test <file>...
+```
 
 ## Build
 

@@ -3,7 +3,7 @@
 #include <imgui.h>
 
 namespace ktxcmp {
-struct AppState;
+class AppState;
 }
 
 namespace ktxcmp::ui {
@@ -37,6 +37,7 @@ void drawStatusBar(AppState& app);
 ImVec4 accentColor();
 ImVec4 panelBgColor();
 ImVec4 viewportBgColor();
+ImVec4 errorColor();
 
 // "label            value", value right-aligned and dimmed when empty.
 void field(const char* label, const char* value);

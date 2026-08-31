@@ -65,6 +65,9 @@ void drawMenuBar(AppState& app) {
         return;
 
     if (ImGui::BeginMenu("File")) {
+        if (ImGui::MenuItem("Open...", "Ctrl+O"))
+            app.openDialogRequested = true;
+        ImGui::Separator();
         if (ImGui::MenuItem("Quit", "Alt+F4"))
             app.running = false;
         ImGui::EndMenu();
@@ -80,9 +83,18 @@ void drawMenuBar(AppState& app) {
 }  // namespace
 
 void field(const char* label, const char* value) {
-    ImGui::TextDisabled("%s", label);
-    ImGui::SameLine();
+    const float labelWidth = ImGui::CalcTextSize(label).x;
     const float valueWidth = ImGui::CalcTextSize(value).x;
+    const float rowWidth = ImGui::GetContentRegionAvail().x;
+    const float gap = ImGui::GetStyle().ItemSpacing.x;
+
+    ImGui::TextDisabled("%s", label);
+
+    // The rails are 136 and 158px wide, so a real format name does not always
+    // fit beside its label. Drop it to its own line rather than overlapping.
+    if (labelWidth + gap + valueWidth <= rowWidth)
+        ImGui::SameLine();
+
     const float avail = ImGui::GetContentRegionAvail().x;
     if (avail > valueWidth)
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - valueWidth);

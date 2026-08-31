@@ -35,7 +35,10 @@ add_subdirectory(third_party/imgui)
 
 add_executable(ktxcmp
     src/main.cpp
+    src/app/AppState.cpp
     src/core/Error.cpp
+    src/container/FormatId.cpp
+    src/container/KtxFile.cpp
     src/ui/Theme.cpp
     src/ui/Ui.cpp
     src/ui/Panels.cpp)
@@ -53,12 +56,13 @@ target_link_libraries(ktxcmp PRIVATE
     SDL3::Headers
     OpenGL::GL)
 
-# M1+ link these; fetched and built now so a dependency problem surfaces at M0
-# rather than mid-milestone.
-if(TARGET ktx)
-    target_link_libraries(ktxcmp PRIVATE ktx)
-    target_compile_definitions(ktxcmp PRIVATE KTXCMP_HAVE_LIBKTX=1)
+# The container layer needs libktx unconditionally from M1 on.
+if(NOT TARGET ktx)
+    message(FATAL_ERROR "libktx target 'ktx' was not created; see cmake/Dependencies.cmake")
 endif()
+target_link_libraries(ktxcmp PRIVATE ktx)
+
+# M2 links this; built now so a dependency problem surfaces early.
 if(TARGET ${KTXCMP_ASTCDEC_TARGET})
     target_link_libraries(ktxcmp PRIVATE ${KTXCMP_ASTCDEC_TARGET})
     target_compile_definitions(ktxcmp PRIVATE KTXCMP_HAVE_ASTCDEC=1)
@@ -81,3 +85,23 @@ endif()
 
 # M8 flips this on for a windowed release build; the console is useful now.
 # set_target_properties(ktxcmp PROPERTIES WIN32_EXECUTABLE TRUE)
+
+# ---------------------------------------------------------------- tests -----
+# Hand-rolled harnesses, no framework (CLAUDE.md). They link the layer under
+# test directly, so they stay runnable without a window.
+
+add_executable(container_test
+    tests/container_test.cpp
+    src/core/Error.cpp
+    src/container/FormatId.cpp
+    src/container/KtxFile.cpp)
+
+target_include_directories(container_test PRIVATE src)
+target_compile_features(container_test PRIVATE cxx_std_23)
+target_link_libraries(container_test PRIVATE ktx)
+
+if(MSVC)
+    target_compile_options(container_test PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
+else()
+    target_compile_options(container_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()

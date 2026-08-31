@@ -9,6 +9,7 @@ namespace ktxcmp::ui {
 ImVec4 accentColor()     { return ImVec4(0.29f, 0.56f, 0.78f, 1.00f); }
 ImVec4 panelBgColor()    { return ImVec4(0.13f, 0.14f, 0.16f, 1.00f); }
 ImVec4 viewportBgColor() { return ImVec4(0.09f, 0.09f, 0.10f, 1.00f); }
+ImVec4 errorColor()      { return ImVec4(0.90f, 0.49f, 0.42f, 1.00f); }
 
 void applyTheme(float scale) {
     ImGui::StyleColorsDark();
