@@ -39,9 +39,23 @@ struct AstcFixture {
     int h;
 };
 
+// A PNG reference, written by our own minimal encoder so 8- and 16-bit paths
+// are both exercised in CI without vendoring an image writer.
+struct PngFixture {
+    const char* filename;
+    int w;
+    int h;
+    int bitDepth;  // 8 or 16
+};
+
 // Pure: no libktx, safe to link into a reader.
 [[nodiscard]] std::vector<Expectation> corpusExpectations();
 [[nodiscard]] std::vector<AstcFixture> astcFixtures();
+[[nodiscard]] std::vector<PngFixture> pngFixtures();
+
+// The 16-bit fixture stores values that collide if either byte is dropped, so a
+// truncating loader cannot pass (CLAUDE.md, trap 5).
+[[nodiscard]] std::vector<std::uint16_t> gradient16(int w, int h);
 
 // The image the ASTC fixtures are encoded from. Both the writer and the decode
 // test build it, so neither has to trust a file to carry it.
@@ -49,5 +63,8 @@ struct AstcFixture {
 
 // Needs libktx's writer; only make_fixtures links this.
 bool writeFixtures(const std::filesystem::path& dir);
+
+// PngWriter.cpp. No dependency beyond the standard library.
+bool writePngFixtures(const std::filesystem::path& dir);
 
 }  // namespace ktxcmp::test

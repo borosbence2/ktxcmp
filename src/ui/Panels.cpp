@@ -6,6 +6,7 @@
 #include "ui/Ui.hpp"
 
 #include "app/AppState.hpp"
+#include "compare/CompareEngine.hpp"
 #include "container/KtxFile.hpp"
 
 #include <imgui.h>
@@ -130,14 +131,54 @@ void drawSlotBody(const SlotState& slot) {
         ImGui::TextDisabled("needs transcode");
 }
 
-void drawSlotA(const SlotState& slot) {
+void drawSlotA(AppState& app) {
     sectionLabel("SLOT A");
     if (beginCard("##slotA"))
-        drawSlotBody(slot);
+        drawSlotBody(app.slotA);
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
     endCard();
+    app.slotRect[0] = AppState::Rect{min.x, min.y, max.x, max.y};
 }
 
-void drawSlotB(const SlotState& slot, bool unused) {
+void drawReferenceBody(AppState& app, SlotState& slot) {
+    if (slot.failed()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, errorColor());
+        ImGui::TextWrapped("%s", categoryName(slot.error->code));
+        ImGui::PopStyleColor();
+        ImGui::TextWrapped("%s", slot.error->message.c_str());
+        return;
+    }
+    if (!slot.isReference()) {
+        ImGui::TextDisabled("no file");
+        ImGui::Separator();
+        field("format", kEmptyValue);
+        field("size", kEmptyValue);
+        field("chain", kEmptyValue);
+        return;
+    }
+
+    ImGui::TextWrapped("%s", slot.path.filename().string().c_str());
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", slot.path.string().c_str());
+    ImGui::Separator();
+
+    char fmt[32];
+    std::snprintf(fmt, sizeof(fmt), "PNG %d-bit", slot.referenceInfo.bitDepth);
+    field("format", fmt);
+    field("size", dimsText(slot.reference->w, slot.reference->h).c_str());
+    field("chain", "explicit");
+
+    // PNG carries no reliable colour-space signal, so this is an assumption on
+    // display, not a fact read from the file (CLAUDE.md, trap 4).
+    bool srgb = slot.referenceTf == TransferFn::Srgb;
+    if (ImGui::Checkbox("assume sRGB", &srgb))
+        app.setReferenceTransfer(Slot::B, srgb ? TransferFn::Srgb : TransferFn::Linear);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("PNG has no dependable colour-space tag. gAMA is never consulted.");
+}
+
+void drawSlotB(AppState& app, bool unused) {
     if (unused)
         pushGrayscale();
 
@@ -149,18 +190,12 @@ void drawSlotB(const SlotState& slot, bool unused) {
         ImGui::TextDisabled("%s", tag);
     }
 
-    if (beginCard("##slotB")) {
-        if (slot.loaded() || slot.failed()) {
-            drawSlotBody(slot);
-        } else {
-            ImGui::TextDisabled("no file");
-            ImGui::Separator();
-            field("format", kEmptyValue);
-            field("size", kEmptyValue);
-            field("chain", kEmptyValue);
-        }
-    }
+    if (beginCard("##slotB"))
+        drawReferenceBody(app, app.slotB);
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
     endCard();
+    app.slotRect[1] = AppState::Rect{min.x, min.y, max.x, max.y};
 
     if (unused)
         popGrayscale();
@@ -220,7 +255,12 @@ void drawViewportBody(AppState& app, UiState& ui, float height) {
     SurfacePtr held = app.cache.get(key);
     const Surface* surface = held.get();
 
+    // Whichever image this view mode is actually showing.
     ImageTexture* texture = nullptr;
+    const SurfacePtr reference = app.slotB.reference;
+    const bool sizesMatch =
+        held && reference && held->w == reference->w && held->h == reference->h;
+
     if (slot.loaded()) {
         const int levels = slot.ktx->info().levelCount;
         ui.levelTextures.resize(static_cast<std::size_t>(levels));
@@ -229,14 +269,41 @@ void drawViewportBody(AppState& app, UiState& ui, float height) {
             auto& entry = ui.levelTextures[index];
             if (!entry)
                 entry = std::make_unique<ImageTexture>();
-            texture = entry.get();
-
-            const DisplayKey dk{key, ui.builtChannels, 0};
+            const DisplayKey dk{key, ui.builtChannels, 0, 0};
             if (held)
                 ui.display.request(dk, held, 0);
             if (auto image = ui.display.get(dk))
-                texture->update(image);
+                entry->update(image);
+            texture = entry.get();
         }
+    }
+
+    if (reference) {
+        const SubresourceKey refKey{Slot::B, 0, 0, 0};
+        const DisplayKey dk{refKey, ui.builtChannels, 0, 0};
+        ui.display.request(dk, reference, 0);
+        if (auto image = ui.display.get(dk))
+            ui.referenceTexture.update(image);
+    } else {
+        ui.referenceTexture.release();
+    }
+
+    if (app.view.viewMode == ViewMode::Diff && sizesMatch) {
+        const DisplayKey dk{key, ui.builtChannels, 0, app.view.diffGain};
+        ui.display.request(dk, held, 0, reference);
+        if (auto image = ui.display.get(dk))
+            ui.diffTexture.update(image);
+    }
+
+    switch (app.view.viewMode) {
+        case ViewMode::B:
+            texture = ui.referenceTexture.valid() ? &ui.referenceTexture : nullptr;
+            break;
+        case ViewMode::Diff:
+            texture = (sizesMatch && ui.diffTexture.valid()) ? &ui.diffTexture : nullptr;
+            break;
+        default:
+            break;  // A, Split and Onion draw slot A as the base
     }
     const bool haveTexture = texture != nullptr && texture->valid();
 
@@ -289,6 +356,7 @@ void drawViewportBody(AppState& app, UiState& ui, float height) {
     }
 
     ui.hasHover = false;
+    ui.hasHoverB = false;
     if (haveImage) {
         const ImVec2 topLeft(origin.x + ui.panX, origin.y + ui.panY);
         ImGui::SetCursorScreenPos(topLeft);
@@ -333,8 +401,23 @@ void drawViewportBody(AppState& app, UiState& ui, float height) {
                 const float* v = surface->at(tx, ty);
                 for (int c = 0; c < 4; ++c)
                     ui.hoverValue[c] = v[c];
+
+                ui.hasHoverB = false;
+                if (reference && tx < reference->w && ty < reference->h) {
+                    const float* vb = reference->at(tx, ty);
+                    for (int c = 0; c < 4; ++c)
+                        ui.hoverValueB[c] = vb[c];
+                    ui.hasHoverB = true;
+                }
             }
         }
+    } else if (app.view.viewMode == ViewMode::Diff && held && !sizesMatch) {
+        ImGui::PushStyleColor(ImGuiCol_Text, errorColor());
+        centeredHint(reference ? "reference dimensions do not match mip 0"
+                               : "Diff needs a reference in slot B");
+        ImGui::PopStyleColor();
+    } else if (app.view.viewMode == ViewMode::B && !reference) {
+        centeredHint("no reference in slot B");
     } else if (cacheState == CacheState::Failed) {
         const auto err = app.cache.error(key);
         ImGui::PushStyleColor(ImGuiCol_Text, errorColor());
@@ -469,23 +552,80 @@ void drawCompareControls(AppState& app) {
     ImGui::Checkbox("Linear light", &v.linearLight);
 }
 
-void drawMetrics() {
-    // Hero number, then the supporting rows. The full per-level table lives
-    // behind the CSV export, not permanently on screen.
+// Hero number, then the supporting rows. The full per-level table lives behind
+// the CSV export, not permanently on screen.
+void drawMetrics(AppState& app) {
+    const bool bcNormal = false;  // BC5 normal-map metrics arrive at M6
+    const char* heroLabel = bcNormal ? "mean angular err" : "PSNR-RGB";
+
+    std::string hero = kEmptyValue;
+    std::string rmse = kEmptyValue, ssim = kEmptyValue, maxErr = kEmptyValue, alpha = kEmptyValue;
+    std::string note;
+    bool isError = false;
+    bool waiting = false;
+
+    if (app.view.compareMode != CompareMode::EncodeFidelity) {
+        note = "modes 2 and 3 arrive at M5";
+    } else if (!app.slotA.loaded()) {
+        note = "no texture in slot A";
+    } else if (!app.slotB.isReference()) {
+        note = "drop a PNG reference on slot B";
+    } else if (!app.compareAvailable()) {
+        waiting = true;
+    } else if (auto result = app.comparer.result(app.compareToken())) {
+        if (!*result) {
+            note = result->error().message;
+            isError = true;
+        } else {
+            const CompareResult& r = **result;
+            hero = formatPsnr(r.rgb.psnr);
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%.3f", r.rgb.rmse);
+            rmse = buf;
+            std::snprintf(buf, sizeof(buf), "%.4f", r.ssim);
+            ssim = buf;
+            std::snprintf(buf, sizeof(buf), "%.1f @%d,%d", r.rgb.maxError, r.rgb.maxErrorX,
+                          r.rgb.maxErrorY);
+            maxErr = buf;
+            alpha = r.alpha.identical ? "identical" : formatPsnr(r.alpha.psnr);
+            if (r.excludedNonFinite > 0)
+                note = std::to_string(r.excludedNonFinite) + " texels excluded (NaN/Inf)";
+            // The toggle must be labelled wherever the numbers appear.
+            if (r.linearLight)
+                note = note.empty() ? "linear light" : note + ", linear light";
+        }
+    } else {
+        waiting = true;
+    }
+
     if (beginCard("##hero")) {
-        ImGui::TextDisabled("PSNR-RGB");
-        const ImGuiStyle& style = ImGui::GetStyle();
-        const float base = style.FontSizeBase > 0.0f ? style.FontSizeBase : ImGui::GetFontSize();
-        ImGui::PushFont(nullptr, base * 1.9f);
-        ImGui::TextUnformatted(kEmptyValue);
-        ImGui::PopFont();
+        ImGui::TextDisabled("%s", heroLabel);
+        if (waiting) {
+            const ImVec2 pos = ImGui::GetCursorScreenPos();
+            drawPendingIndicator(ImVec2(pos.x + 14.0f, pos.y + 14.0f), 10.0f);
+            ImGui::Dummy(ImVec2(0.0f, 28.0f));
+        } else {
+            const ImGuiStyle& style = ImGui::GetStyle();
+            const float base = style.FontSizeBase > 0.0f ? style.FontSizeBase : ImGui::GetFontSize();
+            ImGui::PushFont(nullptr, base * 1.9f);
+            ImGui::TextUnformatted(hero.c_str());
+            ImGui::PopFont();
+        }
     }
     endCard();
 
-    field("RMSE", kEmptyValue);
-    field("SSIM", kEmptyValue);
-    field("max err", kEmptyValue);
-    field("alpha", kEmptyValue);
+    field("RMSE", rmse.c_str());
+    field("SSIM", ssim.c_str());
+    field("max err", maxErr.c_str());
+    field("alpha", alpha.c_str());
+
+    if (!note.empty()) {
+        if (isError)
+            ImGui::PushStyleColor(ImGuiCol_Text, errorColor());
+        ImGui::TextWrapped("%s", note.c_str());
+        if (isError)
+            ImGui::PopStyleColor();
+    }
 }
 
 void drawErrorPlot() {
@@ -501,9 +641,9 @@ void drawErrorPlot() {
 
 void drawSourcesPanel(AppState& app) {
     if (ImGui::Begin(kWinSources)) {
-        drawSlotA(app.slotA);
+        drawSlotA(app);
         ImGui::Spacing();
-        drawSlotB(app.slotB, app.view.compareMode == CompareMode::SelfConsistency);
+        drawSlotB(app, app.view.compareMode == CompareMode::SelfConsistency);
         ImGui::Spacing();
         drawDropTarget();
     }
@@ -530,7 +670,7 @@ void drawAnalysisPanel(AppState& app) {
         ImGui::Spacing();
         drawCompareControls(app);
         ImGui::Spacing();
-        drawMetrics();
+        drawMetrics(app);
         ImGui::Spacing();
         drawErrorPlot();
     }

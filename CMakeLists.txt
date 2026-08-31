@@ -40,8 +40,11 @@ add_executable(ktxcmp
     src/cache/ImageCache.cpp
     src/container/FormatId.cpp
     src/container/KtxFile.cpp
+    src/compare/CompareEngine.cpp
+    src/compare/CompareService.cpp
     src/decode/Decoder.cpp
     src/decode/DecodeService.cpp
+    src/decode/PngLoader.cpp
     src/ui/DisplayCache.cpp
     src/ui/ImageTexture.cpp
     src/ui/Theme.cpp
@@ -107,13 +110,17 @@ set(KTXCMP_LAYER_SOURCES
     src/cache/ImageCache.cpp
     src/container/FormatId.cpp
     src/container/KtxFile.cpp
+    src/compare/CompareEngine.cpp
+    src/compare/CompareService.cpp
     src/decode/Decoder.cpp
-    src/decode/DecodeService.cpp)
+    src/decode/DecodeService.cpp
+    src/decode/PngLoader.cpp)
 
 add_executable(make_fixtures
     tests/make_fixtures.cpp
     tests/CorpusSpec.cpp
-    tests/CorpusWriter.cpp)
+    tests/CorpusWriter.cpp
+    tests/PngWriter.cpp)
 target_include_directories(make_fixtures PRIVATE src tests)
 target_compile_features(make_fixtures PRIVATE cxx_std_23)
 target_link_libraries(make_fixtures PRIVATE ktx)
@@ -122,7 +129,7 @@ add_executable(container_test
     tests/container_test.cpp
     tests/CorpusSpec.cpp
     ${KTXCMP_LAYER_SOURCES})
-target_include_directories(container_test PRIVATE src tests third_party/bcdec)
+target_include_directories(container_test PRIVATE src tests third_party/bcdec third_party/stb)
 target_compile_features(container_test PRIVATE cxx_std_23)
 target_link_libraries(container_test PRIVATE ktx_read ${KTXCMP_ASTCDEC_TARGET})
 
@@ -130,18 +137,26 @@ add_executable(decode_test
     tests/decode_test.cpp
     tests/CorpusSpec.cpp
     ${KTXCMP_LAYER_SOURCES})
-target_include_directories(decode_test PRIVATE src tests third_party/bcdec)
+target_include_directories(decode_test PRIVATE src tests third_party/bcdec third_party/stb)
 target_compile_features(decode_test PRIVATE cxx_std_23)
 target_link_libraries(decode_test PRIVATE ktx_read ${KTXCMP_ASTCDEC_TARGET})
 
 add_executable(cache_test
     tests/cache_test.cpp
     ${KTXCMP_LAYER_SOURCES})
-target_include_directories(cache_test PRIVATE src tests third_party/bcdec)
+target_include_directories(cache_test PRIVATE src tests third_party/bcdec third_party/stb)
 target_compile_features(cache_test PRIVATE cxx_std_23)
 target_link_libraries(cache_test PRIVATE ktx_read ${KTXCMP_ASTCDEC_TARGET})
 
-foreach(t make_fixtures container_test decode_test cache_test)
+add_executable(compare_test
+    tests/compare_test.cpp
+    tests/CorpusSpec.cpp
+    ${KTXCMP_LAYER_SOURCES})
+target_include_directories(compare_test PRIVATE src tests third_party/bcdec third_party/stb)
+target_compile_features(compare_test PRIVATE cxx_std_23)
+target_link_libraries(compare_test PRIVATE ktx_read ${KTXCMP_ASTCDEC_TARGET})
+
+foreach(t make_fixtures container_test decode_test cache_test compare_test)
     if(MSVC)
         target_compile_options(${t} PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus)
     else()
@@ -157,4 +172,6 @@ set_tests_properties(fixtures PROPERTIES FIXTURES_SETUP corpus)
 add_test(NAME container COMMAND container_test --corpus "${KTXCMP_FIXTURE_DIR}")
 add_test(NAME decode COMMAND decode_test "${KTXCMP_FIXTURE_DIR}")
 add_test(NAME cache COMMAND cache_test)
+add_test(NAME compare COMMAND compare_test "${KTXCMP_FIXTURE_DIR}")
+set_tests_properties(compare PROPERTIES FIXTURES_REQUIRED corpus)
 set_tests_properties(container decode PROPERTIES FIXTURES_REQUIRED corpus)

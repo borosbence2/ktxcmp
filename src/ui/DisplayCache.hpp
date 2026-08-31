@@ -33,7 +33,8 @@ using DisplayImagePtr = std::shared_ptr<const DisplayImage>;
 struct DisplayKey {
     SubresourceKey subresource;
     std::uint32_t channels = 0;
-    int maxSize = 0;  // 0 = full resolution
+    int maxSize = 0;   // 0 = full resolution
+    int diffGain = 0;  // 0 = show the surface; >0 = show |A-B| amplified
 
     friend bool operator==(const DisplayKey&, const DisplayKey&) = default;
 };
@@ -41,9 +42,10 @@ struct DisplayKey {
 struct DisplayKeyHash {
     std::size_t operator()(const DisplayKey& k) const noexcept {
         const std::size_t a = SubresourceKeyHash{}(k.subresource);
-        return a ^ (std::hash<std::uint64_t>{}((static_cast<std::uint64_t>(k.channels) << 32) |
-                                               static_cast<std::uint32_t>(k.maxSize)) *
-                    0x9E3779B97F4A7C15ull);
+        const std::uint64_t rest = (static_cast<std::uint64_t>(k.channels) << 40) |
+                                   (static_cast<std::uint64_t>(k.maxSize & 0xFFFF) << 8) |
+                                   static_cast<std::uint64_t>(k.diffGain & 0xFF);
+        return a ^ (std::hash<std::uint64_t>{}(rest) * 0x9E3779B97F4A7C15ull);
     }
 };
 
@@ -57,7 +59,10 @@ public:
 
     // No-op if already built or in flight. The surface is held for the job's
     // lifetime, so cache eviction cannot pull it out from under a worker.
-    void request(const DisplayKey& key, SurfacePtr surface, int priority);
+    // `other` is only used when key.diffGain > 0, where the image built is the
+    // amplified absolute difference between the two.
+    void request(const DisplayKey& key, SurfacePtr surface, int priority,
+                 SurfacePtr other = nullptr);
     [[nodiscard]] DisplayImagePtr get(const DisplayKey& key) const;
     [[nodiscard]] bool pending(const DisplayKey& key) const;
 
@@ -69,6 +74,7 @@ private:
     struct Job {
         DisplayKey key;
         SurfacePtr surface;
+        SurfacePtr other;
         int priority = 0;
         std::uint64_t cost = 0;
     };

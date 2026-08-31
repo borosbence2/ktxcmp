@@ -8,19 +8,20 @@ and [PLAN.md](PLAN.md) for the milestone order and the UI specification.
 
 ## Status
 
-**M3 — subresource navigation.** Opens `.ktx2` and `.ktx`, decodes ASTC, BC5,
-BC7 and uncompressed to RGBA32F on a worker pool, and displays it. The mip strip
-shows a real thumbnail per level and fills progressively, smallest first. Pan
-with the middle button or space-drag, zoom with the wheel, isolate channels with
-`1`-`4` (`0` for RGB), `F` to fit, `Ctrl+1` for 1:1, `[` and `]` to step levels.
-The status bar reads out the texel under the cursor. Comparison against a
-reference is M4.
+**M4 — reference comparison.** Everything above, plus a PNG reference in slot B
+(8-bit and 16-bit) and compare mode 1: KTX mip 0 against the reference with no
+resampling. Reports PSNR-RGB, RMSE, SSIM, and max error with its coordinate,
+with alpha always separate. Diff view mode with a 1x/4x/8x/16x gain, and the
+status bar reads A, B and the delta under the cursor. Modes 2 and 3 are M5.
 
-Decoded surfaces live in an LRU cache budgeted at 384 MB; turning them into
-display bytes happens on a second small pool, because that conversion is 117 ms
-for a 2048 square level and has no business on the UI thread. Measured over a
-1307-frame session driving a 12-level 2048 square ASTC file: mean 6.96 ms, and
-exactly one frame over 16.7 ms, which is the initial texture upload.
+Drop a file on a slot card to load it there, or anywhere else and the type
+decides. PNG carries no dependable colour-space tag, so sRGB is assumed and the
+slot B card exposes the override; gAMA is never consulted.
+
+Metrics run on a worker: SSIM alone is five Gaussian blurs over every texel.
+Measured over a 1307-frame session driving a 12-level 2048 square ASTC file:
+mean 6.96 ms, and exactly one frame over 16.7 ms, which is the initial texture
+upload.
 
 ## Build
 

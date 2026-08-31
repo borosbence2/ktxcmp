@@ -183,12 +183,28 @@ void drawStatusBar(AppState& app, UiState& ui) {
             ImGui::SameLine(0.0f, 18.0f);
             ImGui::TextDisabled("B");
             ImGui::SameLine();
-            ImGui::TextUnformatted(kEmptyValue);
+            if (ui.hasHoverB) {
+                ImGui::Text("%3d %3d %3d %3d", static_cast<int>(ui.hoverValueB[0] * 255.0f + 0.5f),
+                            static_cast<int>(ui.hoverValueB[1] * 255.0f + 0.5f),
+                            static_cast<int>(ui.hoverValueB[2] * 255.0f + 0.5f),
+                            static_cast<int>(ui.hoverValueB[3] * 255.0f + 0.5f));
+            } else {
+                ImGui::TextUnformatted(kEmptyValue);
+            }
 
             ImGui::SameLine(0.0f, 18.0f);
             ImGui::TextDisabled("delta");
             ImGui::SameLine();
-            ImGui::TextUnformatted(kEmptyValue);
+            if (ui.hasHover && ui.hasHoverB) {
+                // Signed, and in the same 0-255 units the metrics use.
+                ImGui::Text("%+.1f %+.1f %+.1f %+.1f",
+                            (ui.hoverValue[0] - ui.hoverValueB[0]) * 255.0f,
+                            (ui.hoverValue[1] - ui.hoverValueB[1]) * 255.0f,
+                            (ui.hoverValue[2] - ui.hoverValueB[2]) * 255.0f,
+                            (ui.hoverValue[3] - ui.hoverValueB[3]) * 255.0f);
+            } else {
+                ImGui::TextUnformatted(kEmptyValue);
+            }
 
             ImGui::EndMenuBar();
         }

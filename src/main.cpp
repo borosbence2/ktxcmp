@@ -167,8 +167,15 @@ int main(int argc, char** argv) {
             if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
                 event.window.windowID == SDL_GetWindowID(window))
                 app.running = false;
-            if (event.type == SDL_EVENT_DROP_FILE && event.drop.data != nullptr)
-                app.enqueueOpen(fromUtf8(event.drop.data));
+            if (event.type == SDL_EVENT_DROP_FILE && event.drop.data != nullptr) {
+                // The drop position decides which slot it lands on, so it has to
+                // travel with the path. SDL reports it in window coordinates.
+                int wx = 0, wy = 0;
+                SDL_GetWindowPosition(window, &wx, &wy);
+                app.enqueueOpen(fromUtf8(event.drop.data),
+                                static_cast<float>(wx) + event.drop.x,
+                                static_cast<float>(wy) + event.drop.y);
+            }
         }
 
         if (app.openDialogRequested) {
@@ -180,6 +187,7 @@ int main(int argc, char** argv) {
         // Only asks; the workers deliver into the cache on their own schedule.
         const int levelBefore = app.view.level;
         app.requestVisible();
+        app.requestCompare();
         if (app.view.level != levelBefore)
             uiState.fitRequested = true;
 

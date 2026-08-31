@@ -27,6 +27,8 @@ struct UiState {
     // upload at all after the first visit.
     std::vector<std::unique_ptr<ImageTexture>> levelTextures;
     std::vector<std::unique_ptr<ImageTexture>> thumbnails;
+    ImageTexture referenceTexture;
+    ImageTexture diffTexture;
 
     // Channel mask the textures were built for; a change rebuilds them.
     std::uint32_t builtChannels = 0xFFFFFFFFu;
@@ -50,6 +52,8 @@ struct UiState {
     int hoverX = 0;
     int hoverY = 0;
     float hoverValue[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    bool hasHoverB = false;
+    float hoverValueB[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 };
 
 // Dock window titles. The layout builder and the panels must agree on these.

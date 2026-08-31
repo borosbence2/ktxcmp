@@ -194,6 +194,9 @@ bool writeFixtures(const std::filesystem::path& dir) {
         if (!writeAstcRoundTrip(dir / f.filename, f.w, f.h))
             return false;
 
+    if (!writePngFixtures(dir))
+        return false;
+
     // Every file the spec promises must now exist, or the two have drifted.
     for (const Expectation& e : corpusExpectations())
         if (!std::filesystem::exists(dir / e.filename))

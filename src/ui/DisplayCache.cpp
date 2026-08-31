@@ -103,9 +103,47 @@ std::vector<std::uint8_t> halve(const std::vector<std::uint8_t>& src, int w, int
     return out;
 }
 
-DisplayImagePtr build(const Surface& surface, std::uint32_t channelKey, int maxSize) {
+// The difference image the Diff view mode shows. Built here rather than as a
+// separate Surface so the per-texel pass happens once, on this worker.
+std::vector<std::uint8_t> makeDiffPixels(const Surface& a, const Surface& b, int gain,
+                                         const Channels& c) {
+    std::vector<std::uint8_t> out(a.texelCount() * 4u, 255);
+    const float scale = static_cast<float>(gain > 0 ? gain : 1);
+    const std::size_t texels = a.texelCount();
+    for (std::size_t i = 0; i < texels; ++i) {
+        const float* pa = a.rgba.data() + i * 4u;
+        const float* pb = b.rgba.data() + i * 4u;
+        std::uint8_t* dst = out.data() + i * 4u;
+
+        float d[3];
+        bool bad = false;
+        for (int k = 0; k < 3; ++k) {
+            d[k] = std::fabs(pa[k] - pb[k]) * scale;
+            if (!std::isfinite(d[k]))
+                bad = true;
+        }
+        if (bad) {
+            dst[0] = 255;
+            dst[1] = 0;
+            dst[2] = 255;
+            dst[3] = 255;
+            continue;
+        }
+        dst[0] = c.r ? toByte(d[0]) : 0;
+        dst[1] = c.g ? toByte(d[1]) : 0;
+        dst[2] = c.b ? toByte(d[2]) : 0;
+        dst[3] = 255;
+    }
+    return out;
+}
+
+DisplayImagePtr build(const Surface& surface, const Surface* other, std::uint32_t channelKey,
+                      int maxSize, int diffGain) {
     auto image = std::make_shared<DisplayImage>();
-    std::vector<std::uint8_t> level = makeDisplayPixels(surface, unpack(channelKey));
+    std::vector<std::uint8_t> level =
+        (diffGain > 0 && other != nullptr)
+            ? makeDiffPixels(surface, *other, diffGain, unpack(channelKey))
+            : makeDisplayPixels(surface, unpack(channelKey));
     int w = surface.w;
     int h = surface.h;
 
@@ -153,9 +191,13 @@ DisplayCache::~DisplayCache() {
             t.join();
 }
 
-void DisplayCache::request(const DisplayKey& key, SurfacePtr surface, int priority) {
+void DisplayCache::request(const DisplayKey& key, SurfacePtr surface, int priority,
+                           SurfacePtr other) {
     if (!surface)
         return;
+    if (key.diffGain > 0 &&
+        (!other || other->w != surface->w || other->h != surface->h))
+        return;  // a diff of mismatched sizes is not a picture of anything
     {
         const std::lock_guard<std::mutex> lock(m_mutex);
         if (m_stopping || m_ready.count(key) != 0 || m_inFlight.count(key) != 0)
@@ -165,6 +207,7 @@ void DisplayCache::request(const DisplayKey& key, SurfacePtr surface, int priori
         job.key = key;
         job.cost = static_cast<std::uint64_t>(surface->w) * surface->h;
         job.surface = std::move(surface);
+        job.other = std::move(other);
         job.priority = priority;
         m_queue.push_back(std::move(job));
     }
@@ -215,7 +258,8 @@ void DisplayCache::workerLoop() {
             m_queue.erase(best);
         }
 
-        DisplayImagePtr image = build(*job.surface, job.key.channels, job.key.maxSize);
+        DisplayImagePtr image = build(*job.surface, job.other.get(), job.key.channels,
+                                      job.key.maxSize, job.key.diffGain);
 
         {
             const std::lock_guard<std::mutex> lock(m_mutex);

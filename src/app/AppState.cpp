@@ -33,20 +33,39 @@ std::string extensionOf(const std::filesystem::path& path) {
 
 AppState::AppState() : cache(kCacheBudget), decoder(cache, workerCount()) {}
 
-void AppState::enqueueOpen(std::filesystem::path path) {
+void AppState::enqueueOpen(std::filesystem::path path, float dropX, float dropY) {
     const std::lock_guard<std::mutex> lock(m_pendingMutex);
-    m_pending.push_back(std::move(path));
+    m_pending.push_back(PendingOpen{std::move(path), dropX, dropY});
 }
 
 void AppState::processPendingOpens() {
-    std::vector<std::filesystem::path> paths;
+    std::vector<PendingOpen> opens;
     {
         const std::lock_guard<std::mutex> lock(m_pendingMutex);
-        paths.swap(m_pending);
+        opens.swap(m_pending);
     }
-    // Everything routes to slot A until slot B means something at M4.
-    for (const auto& path : paths)
-        loadIntoSlot(Slot::A, path);
+
+    for (const auto& open : opens) {
+        // A drop onto a slot card goes to that slot; a drop anywhere else fills
+        // the first empty one (PLAN.md M4).
+        Slot target = Slot::A;
+        bool decided = false;
+        if (open.x >= 0.0f) {
+            for (int i = 0; i < 2 && !decided; ++i) {
+                if (slotRect[i].valid() && slotRect[i].contains(open.x, open.y)) {
+                    target = i == 0 ? Slot::A : Slot::B;
+                    decided = true;
+                }
+            }
+        }
+        if (!decided) {
+            // Dropped on the body. A PNG is only ever a reference and a KTX only
+            // ever a source, so the file type decides this more reliably than
+            // "first empty" would.
+            target = extensionOf(open.path) == ".png" ? Slot::B : Slot::A;
+        }
+        loadIntoSlot(target, open.path);
+    }
 }
 
 void AppState::loadIntoSlot(Slot which, const std::filesystem::path& path) {
@@ -58,14 +77,20 @@ void AppState::loadIntoSlot(Slot which, const std::filesystem::path& path) {
     cache.invalidate(which);
 
     target.ktx.reset();
+    target.reference.reset();
+    target.referenceInfo = PngInfo{};
     target.error.reset();
     target.path = path;
+    m_compareAvailable = false;
 
-    // A dropped PNG is a reasonable thing for someone to try, and "not a KTX
-    // file" would be a true but unhelpful answer to it.
     if (extensionOf(path) == ".png") {
-        target.error = Error{ErrorCode::UnsupportedFormat,
-                             "PNG reference images are not supported yet"};
+        auto loaded = loadPng(path, target.referenceTf, &target.referenceInfo);
+        if (!loaded) {
+            target.error = loaded.error();
+            return;
+        }
+        target.reference = std::make_shared<const Surface>(std::move(*loaded));
+        m_compareAvailable = false;
         return;
     }
 
@@ -78,6 +103,48 @@ void AppState::loadIntoSlot(Slot which, const std::filesystem::path& path) {
 
     view.level = 0;
     clampSelection();
+}
+
+void AppState::setReferenceTransfer(Slot which, TransferFn tf) {
+    SlotState& target = slot(which);
+    if (target.referenceTf == tf)
+        return;
+    target.referenceTf = tf;
+    if (!target.isReference())
+        return;
+
+    // Reload rather than re-tag: the stored values are the same either way, but
+    // going back through the loader keeps one path responsible for the mapping.
+    auto reloaded = loadPng(target.path, tf, &target.referenceInfo);
+    if (!reloaded) {
+        target.error = reloaded.error();
+        target.reference.reset();
+        return;
+    }
+    target.reference = std::make_shared<const Surface>(std::move(*reloaded));
+    m_compareAvailable = false;
+}
+
+void AppState::requestCompare() {
+    m_compareAvailable = false;
+    if (view.compareMode != CompareMode::EncodeFidelity)
+        return;  // modes 2 and 3 arrive at M5
+    if (!slotA.loaded() || !slotB.isReference())
+        return;
+
+    // Mode 1 is mip 0 against the reference, with no resampling: the only
+    // unconfounded measurement (CLAUDE.md, Compare modes).
+    const SubresourceKey key{Slot::A, 0, view.layer, view.face};
+    SurfacePtr a = cache.get(key);
+    if (!a)
+        return;  // still decoding; the panel shows the pending state
+
+    // The token has to change whenever anything the answer depends on changes.
+    m_compareToken = (cache.generation(Slot::A) * 1000003ull) ^
+                     (reinterpret_cast<std::uintptr_t>(slotB.reference.get()) * 31ull) ^
+                     (view.linearLight ? 0x5bf03635ull : 0ull);
+    m_compareAvailable = true;
+    comparer.request(m_compareToken, a, slotB.reference, view.linearLight);
 }
 
 void AppState::clampSelection() {

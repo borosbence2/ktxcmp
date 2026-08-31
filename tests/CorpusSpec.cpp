@@ -77,6 +77,31 @@ std::vector<AstcFixture> astcFixtures() {
     };
 }
 
+std::vector<PngFixture> pngFixtures() {
+    return {
+        {"reference_8bit_66x36.png", 66, 36, 8},
+        {"reference_16bit_66x36.png", 66, 36, 16},
+    };
+}
+
+// Values chosen so that dropping either byte collapses distinct texels onto the
+// same number; a truncating 16-bit path cannot survive this.
+std::vector<std::uint16_t> gradient16(int w, int h) {
+    std::vector<std::uint16_t> out(static_cast<std::size_t>(w) * h * 4);
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            std::uint16_t* p = out.data() + (static_cast<std::size_t>(y) * w + x) * 4;
+            const int i = y * w + x;
+            p[0] = static_cast<std::uint16_t>(x * 65535 / (w - 1));
+            p[1] = static_cast<std::uint16_t>(y * 65535 / (h - 1));
+            // Low byte varies while the high byte repeats, and vice versa.
+            p[2] = static_cast<std::uint16_t>(((i & 0xFF) << 8) | ((i >> 8) & 0xFF));
+            p[3] = 65535;
+        }
+    }
+    return out;
+}
+
 // A smooth gradient plus a hard edge, so both the easy and the awkward parts of
 // a block encoder are represented.
 std::vector<std::uint8_t> gradient(int w, int h) {
