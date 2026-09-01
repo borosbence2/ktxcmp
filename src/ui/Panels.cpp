@@ -395,6 +395,29 @@ void drawViewportBody(AppState& app, UiState& ui, float height) {
                      ImVec2(imgW * ui.zoom, imgH * ui.zoom));
 
         ImDrawList* draw = ImGui::GetWindowDrawList();
+        const ImVec2 bottomRight(topLeft.x + imgW * ui.zoom, topLeft.y + imgH * ui.zoom);
+
+        // Split and Onion lay the reference over the same rectangle. They need B
+        // at the same size, which is the same condition Diff has.
+        const bool overlay = (app.view.viewMode == ViewMode::Split ||
+                              app.view.viewMode == ViewMode::Onion) &&
+                             ui.referenceTexture.valid() && sizesMatch;
+        if (overlay) {
+            const ImTextureID refId = static_cast<ImTextureID>(ui.referenceTexture.id());
+            if (app.view.viewMode == ViewMode::Split) {
+                const float wipe = topLeft.x + (bottomRight.x - topLeft.x) * app.view.splitWipe;
+                draw->PushClipRect(ImVec2(wipe, topLeft.y), bottomRight, true);
+                draw->AddImage(refId, topLeft, bottomRight);
+                draw->PopClipRect();
+                // The divider makes it obvious which side is which.
+                draw->AddLine(ImVec2(wipe, topLeft.y), ImVec2(wipe, bottomRight.y),
+                              ImGui::GetColorU32(ImVec4(1, 1, 1, 0.7f)), 1.0f);
+            } else {
+                const float a = app.view.onionBlend;
+                draw->AddImage(refId, topLeft, bottomRight, ImVec2(0, 0), ImVec2(1, 1),
+                               ImGui::GetColorU32(ImVec4(1, 1, 1, a)));
+            }
+        }
 
         // Pixel grid, once a texel is big enough for the line not to swamp it.
         if (ui.zoom >= 8.0f) {
@@ -476,6 +499,13 @@ void drawViewportBody(AppState& app, UiState& ui, float height) {
         ImGui::PopStyleColor();
     } else if (app.view.viewMode == ViewMode::B && !reference) {
         centeredHint("no reference in slot B");
+    } else if ((app.view.viewMode == ViewMode::Split || app.view.viewMode == ViewMode::Onion) &&
+               held && !sizesMatch) {
+        // Showing slot A unchanged would look like the mode was working.
+        ImGui::PushStyleColor(ImGuiCol_Text, errorColor());
+        centeredHint(reference ? "reference dimensions do not match mip 0"
+                               : "Split and Onion need a reference in slot B");
+        ImGui::PopStyleColor();
     } else if (cacheState == CacheState::Failed) {
         const auto err = app.cache.error(key);
         ImGui::PushStyleColor(ImGuiCol_Text, errorColor());
@@ -533,7 +563,7 @@ void drawControlRow(AppState& app) {
             for (int i = 0; i < IM_ARRAYSIZE(kGainValues); ++i)
                 if (kGainValues[i] == v.diffGain)
                     current = i;
-            const float width = ImGui::CalcTextSize("gain 16x").x + sq;
+            const float width = ImGui::CalcTextSize("gain 16x").x + sq + 6.0f;
             alignRight(width);
             ImGui::SetNextItemWidth(width);
             if (ImGui::Combo("##gain", &current, kGains, IM_ARRAYSIZE(kGains)))
@@ -608,11 +638,29 @@ void drawCompareControls(AppState& app) {
     ViewState& v = app.view;
 
     // A dropdown, not tabs: modes 2 and 3 bring dependent controls with them.
-    static const char* kModes[] = {"1 Encode fidelity", "2 Chain vs ref", "3 Self-consistency"};
-    int current = static_cast<int>(v.compareMode);
+    // The preview is short because the rail is 158px and the arrow takes part of
+    // it; the popup carries the full name and what the mode actually measures.
+    static const char* kShort[] = {"1 Encode", "2 Chain", "3 Self"};
+    static const char* kFull[] = {"1 Encode fidelity", "2 Chain vs reference",
+                                  "3 Self-consistency"};
+    static const char* kWhat[] = {
+        "KTX mip 0 against the reference, no resampling.\nThe only unconfounded measurement.",
+        "The reference downsampled to each level.\nDepends on the filter unless you supply a chain.",
+        "Level N-1 halved, against level N.\nNeeds no reference."};
+
+    const int current = static_cast<int>(v.compareMode);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::Combo("##compareMode", &current, kModes, IM_ARRAYSIZE(kModes)))
-        v.compareMode = static_cast<CompareMode>(current);
+    if (ImGui::BeginCombo("##compareMode", kShort[current])) {
+        for (int i = 0; i < IM_ARRAYSIZE(kFull); ++i) {
+            if (ImGui::Selectable(kFull[i], i == current))
+                v.compareMode = static_cast<CompareMode>(i);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", kWhat[i]);
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", kFull[current]);
 
     if (v.compareMode == CompareMode::EncodeFidelity)
         return;  // no resampling, so no filter controls
@@ -760,8 +808,10 @@ const ChainReport* currentChainReport(AppState& app, UiState& ui) {
 // is why the table is behind a toggle (PLAN.md, right rail).
 void drawErrorPlot(AppState& app, const ChainReport* report) {
     // The axis changes with the metric family, so the label has to as well:
-    // degrees and decibels run in opposite directions.
-    const bool normalMode = report != nullptr && report->normalMode;
+    // degrees and decibels run in opposite directions. Before a report exists
+    // the label still has to agree with the panel above it, so it follows the
+    // detection rather than the report.
+    const bool normalMode = report != nullptr ? report->normalMode : normalModeActive(app);
     sectionLabel(normalMode ? "Angular error by level (deg)" : "PSNR by level (dB)");
 
     ImGui::PushStyleColor(ImGuiCol_ChildBg, viewportBgColor());

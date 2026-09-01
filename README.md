@@ -8,35 +8,24 @@ and [PLAN.md](PLAN.md) for the milestone order and the UI specification.
 
 ## Status
 
-**M7 — reference chains and export.** All three compare modes, BC5 normal-map
-interpretation, and explicit reference chains.
+All eight milestones are complete and the UI has been driven through end to end.
 
-Mode 1 is KTX mip 0 against a PNG reference with no resampling. Mode 2
-downsamples the reference to each level, or uses a supplied chain: point
-`File > Open reference chain` at a folder of PNGs and they are matched to the
-levels by dimension. Matching is by size alone - filenames are never parsed,
-because a name like `_mip3` is a convention rather than a fact. A level with no
-matching image is reported and left unmeasured, never filled in from somewhere
-else. A supplied chain makes the filter irrelevant, which is the reason to
-supply one. Mode 3 halves level N-1 and compares it to level N, needing no
-reference.
+Opens `.ktx2` and `.ktx`, decodes ASTC, BC5, BC7 and uncompressed to RGBA32F on a
+worker pool, and compares against a PNG reference three ways: mip 0 against the
+reference with no resampling, the reference downsampled to each level (or an
+explicit chain of PNGs matched by dimension), and the chain against itself.
 
-BC5 is read as a normal map by default: z is reconstructed, both sides are
-remapped the same way, and the metrics change wholesale to angular error in
-degrees. The format banner offers a raw RG override that puts the colour
-metrics back.
+BC5 is read as a normal map by default and the metrics change wholesale to
+angular error; a raw RG override puts the colour metrics back. Reports PSNR-RGB,
+RMSE, SSIM and max error with its coordinate, alpha always separate, an
+error-by-level plot, a level table, warning badges on the mip strip, and CSV
+export.
 
-CSV export carries mode, filter, both linear-light flags, normal-map mode,
-whether the chain was supplied or generated, and both file paths, before any
-numbers - the per-level figures are not interpretable without them. Column names
-follow the metric family.
-
-Five resampling filters. Two linear-light toggles with deliberately opposite
-defaults: resampling in linear light is **on**, the linear-light *metric* is
-**off**. Resampled normal maps are renormalised before any angle is measured.
-
-Chain validation flags truncated chains, wrong level dimensions, constant or
-black levels, NaN and Inf, alpha-coverage drift, and missing chain references.
+Five view modes: A, B, Diff with a gain selector, Split with a wipe, Onion with
+a blend. Pan with the middle button or space-drag, zoom with the wheel, isolate
+channels with `1`-`4` (`0` for RGB), `F` to fit, `Ctrl+1` for 1:1, `[` and `]` to
+step levels. The status bar reads out the texel under the cursor, in directions
+and degrees when the texture is a normal map.
 
 ## Build
 

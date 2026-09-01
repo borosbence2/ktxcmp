@@ -225,10 +225,18 @@ Result<ChainReport> analyseChain(const ChainInput& input) {
         if (stats.nonFinite > 0)
             report.warnings.push_back(ChainWarning{
                 level, std::to_string(stats.nonFinite) + " texels are NaN or Inf"});
-        if (stats.black)
-            report.warnings.push_back(ChainWarning{level, "is entirely black"});
-        else if (stats.constant)
-            report.warnings.push_back(ChainWarning{level, "is a single constant colour"});
+        // Every mip chain converges to one colour at the bottom - a 1x1 level is
+        // constant by definition - so reporting that is noise, not a finding.
+        // The check only applies where being constant would be surprising.
+        constexpr std::size_t kConstantCheckMinTexels = 64;  // 8x8
+        const std::size_t texels =
+            static_cast<std::size_t>(stats.w) * static_cast<std::size_t>(stats.h);
+        if (texels >= kConstantCheckMinTexels) {
+            if (stats.black)
+                report.warnings.push_back(ChainWarning{level, "is entirely black"});
+            else if (stats.constant)
+                report.warnings.push_back(ChainWarning{level, "is a single constant colour"});
+        }
 
         // Alpha-test coverage drift, against level 0.
         if (level > 0 && !report.levels.empty()) {
