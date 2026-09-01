@@ -5,6 +5,7 @@
 
 #include "cache/ImageCache.hpp"
 #include "compare/CompareMode.hpp"
+#include "compare/ReferenceChain.hpp"
 #include "compare/ChainService.hpp"
 #include "compare/CompareService.hpp"
 #include "compare/Resampler.hpp"
@@ -80,8 +81,17 @@ struct SlotState {
     // can override rather than something read from the file (CLAUDE.md, trap 4).
     TransferFn referenceTf = TransferFn::Srgb;
 
+    // An explicit reference chain: one PNG per level, matched by dimension.
+    // Entries are null where nothing matched, which is reported rather than
+    // filled in (PLAN.md M7).
+    std::vector<SurfacePtr> chain;
+    std::vector<std::filesystem::path> chainPaths;
+    std::string chainSource;   // what the user pointed at
+    std::vector<std::string> chainProblems;
+
     std::optional<Error> error;
 
+    [[nodiscard]] bool hasChain() const { return !chain.empty(); }
     [[nodiscard]] bool loaded() const { return ktx != nullptr; }
     [[nodiscard]] bool isReference() const { return reference != nullptr; }
     [[nodiscard]] bool occupied() const { return loaded() || isReference(); }
@@ -120,6 +130,11 @@ public:
     // Re-reads the reference under a different colour-space assumption.
     void setReferenceTransfer(Slot slot, TransferFn tf);
 
+    // Loads a set of PNGs as an explicit reference chain and matches them to the
+    // levels of slot A by dimension. A directory loads every PNG inside it.
+    void loadReferenceChain(const std::vector<std::filesystem::path>& paths);
+    void clearReferenceChain();
+
     // Screen rectangles of the two slot cards, published by the UI each frame so
     // a drop can be routed to the card it landed on.
     struct Rect {
@@ -148,6 +163,7 @@ public:
 
     // Written by the UI when the user asks for one; main turns it into a dialog.
     bool exportCsvRequested = false;
+    bool openChainDialogRequested = false;
     [[nodiscard]] std::string buildCsv() const;
 
     // Asks for what the UI is about to draw: the selected subresource first,

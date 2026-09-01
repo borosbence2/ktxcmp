@@ -110,8 +110,14 @@ Result<ChainReport> analyseChain(const ChainInput& input) {
         if (!s)
             return fail(ErrorCode::Internal, "a level is still decoding");
 
-    if (input.mode == CompareMode::ChainVsReference && !input.reference)
+    const bool explicitChain = !input.referenceChain.empty();
+    if (input.mode == CompareMode::ChainVsReference && !input.reference && !explicitChain)
         return fail(ErrorCode::Internal, "mode 2 needs a reference in slot B");
+    if (explicitChain && input.referenceChain.size() != input.levels.size())
+        return fail(ErrorCode::Internal,
+                    "the reference chain has " + std::to_string(input.referenceChain.size()) +
+                        " entries but the texture has " + std::to_string(input.levels.size()) +
+                        " levels");
     if (input.mode == CompareMode::EncodeFidelity)
         return fail(ErrorCode::Internal, "mode 1 is a single-level comparison, not a chain");
 
@@ -121,6 +127,7 @@ Result<ChainReport> analyseChain(const ChainInput& input) {
     report.resampleLinearLight = input.resampleLinearLight;
     report.metricLinearLight = input.metricLinearLight;
     report.normalMode = input.normalMode;
+    report.explicitChain = explicitChain;
     report.baseWidth = input.levels.front()->w;
     report.baseHeight = input.levels.front()->h;
     report.expectedLevels = expectedLevelCount(report.baseWidth, report.baseHeight);
@@ -136,7 +143,22 @@ Result<ChainReport> analyseChain(const ChainInput& input) {
         stats.h = s.h;
         measureLevel(s, report.alphaThreshold, stats);
 
-        if (input.mode == CompareMode::ChainVsReference) {
+        if (input.mode == CompareMode::ChainVsReference && explicitChain) {
+            // Supplied reference: used exactly as given. No resampling happens,
+            // so the result does not depend on the filter at all.
+            const SurfacePtr& supplied = input.referenceChain[static_cast<std::size_t>(level)];
+            if (!supplied) {
+                stats.note = "no reference image at this size";
+            } else if (supplied->w != s.w || supplied->h != s.h) {
+                stats.note = "reference is " + std::to_string(supplied->w) + "x" +
+                             std::to_string(supplied->h) + ", level is " + std::to_string(s.w) +
+                             "x" + std::to_string(s.h);
+            } else if (supplied->tf != s.tf) {
+                stats.note = "reference and texture are in different transfer functions";
+            } else {
+                measureAgainst(s, *supplied, input, stats);
+            }
+        } else if (input.mode == CompareMode::ChainVsReference) {
             // At a level the reference is already the size of, there is nothing
             // to resample, and resampling anyway would not be free: a
             // linear-light round trip through the transfer function loses a
@@ -172,6 +194,17 @@ Result<ChainReport> analyseChain(const ChainInput& input) {
     }
 
     // ---- chain validation (CLAUDE.md, Chain validation checks) ----
+
+    if (explicitChain) {
+        int missing = 0;
+        for (const SurfacePtr& s : input.referenceChain)
+            if (!s)
+                ++missing;
+        if (missing > 0)
+            report.warnings.push_back(
+                ChainWarning{-1, std::to_string(missing) +
+                                     " levels have no reference image and were not compared"});
+    }
 
     if (count != report.expectedLevels)
         report.warnings.push_back(
@@ -219,11 +252,23 @@ std::string toCsv(const ChainReport& report, const std::string& pathA, const std
     out << "# filter," << filterName(report.filter) << "\n";
     out << "# resample_linear_light," << (report.resampleLinearLight ? "true" : "false") << "\n";
     out << "# metric_linear_light," << (report.metricLinearLight ? "true" : "false") << "\n";
+    out << "# normal_map_mode," << (report.normalMode ? "true" : "false") << "\n";
+    // Whether the per-level references were supplied or generated decides
+    // whether the filter above means anything at all.
+    out << "# reference_chain," << (report.explicitChain ? "explicit" : "generated") << "\n";
     out << "# alpha_threshold," << fixed(report.alphaThreshold, 3) << "\n";
     out << "# slot_a," << pathA << "\n";
     out << "# slot_b," << pathB << "\n";
-    out << "level,width,height,psnr_rgb_db,rmse,ssim,max_error,max_error_x,max_error_y,"
-           "alpha_psnr_db,mean_luma,alpha_coverage,excluded_non_finite,note\n";
+    // The column names follow the metric family. Angles under colour headings
+    // would be worse than useless.
+    if (report.normalMode)
+        out << "level,width,height,mean_angle_deg,median_angle_deg,p95_angle_deg,"
+               "max_angle_deg,max_angle_x,max_angle_y,mean_length_deviation,"
+               "mean_luma,alpha_coverage,excluded_non_finite,note\n";
+    else
+        out << "level,width,height,psnr_rgb_db,rmse,ssim,max_error,max_error_x,"
+               "max_error_y,alpha_psnr_db,mean_luma,alpha_coverage,"
+               "excluded_non_finite,note\n";
 
     for (const LevelStats& s : report.levels) {
         out << s.level << ',' << s.w << ',' << s.h << ',';

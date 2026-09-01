@@ -9,6 +9,8 @@
 #include "Corpus.hpp"
 
 #include "compare/ChainAnalysis.hpp"
+#include "compare/ReferenceChain.hpp"
+#include "decode/PngLoader.hpp"
 #include "container/KtxFile.hpp"
 #include "decode/Decoder.hpp"
 
@@ -271,6 +273,149 @@ void testCsvCarriesTheSettings(const std::filesystem::path& dir) {
     check(rows >= levels.size(), "the CSV has a row per level");
 }
 
+// ------------------------------------------------ explicit reference chain ---
+
+void testMatchingIsByDimensionOnly() {
+    using ktxcmp::Extent;
+    const std::vector<Extent> levels = {{64, 64}, {32, 32}, {16, 16}, {8, 8}};
+
+    // Deliberately out of order, and one size missing.
+    const std::vector<Extent> files = {{8, 8}, {64, 64}, {32, 32}};
+    const ktxcmp::ChainMatch m = ktxcmp::matchByDimension(files, levels);
+
+    check(m.fileForLevel[0] == 1 && m.fileForLevel[1] == 2 && m.fileForLevel[3] == 0,
+          "files are matched to levels by size regardless of the order given");
+    check(m.fileForLevel[2] == -1, "a level with no file of its size stays unmatched");
+    check(m.unmatchedLevels.size() == 1 && m.unmatchedLevels[0] == 2,
+          "the unmatched level is reported by index");
+    check(!m.complete(), "an incomplete chain says so");
+    check(m.matchedCount() == 3, "the matched count is the number actually paired");
+}
+
+void testMatchingReportsCollisionsAndStrays() {
+    using ktxcmp::Extent;
+    const std::vector<Extent> levels = {{64, 64}, {32, 32}};
+    // Two files at 32x32, and one at a size no level has.
+    const std::vector<Extent> files = {{64, 64}, {32, 32}, {32, 32}, {7, 7}};
+    const ktxcmp::ChainMatch m = ktxcmp::matchByDimension(files, levels);
+
+    check(!m.problems.empty(), "two files of the same size are reported as a problem");
+    check(!m.unmatchedFiles.empty(), "a file matching no level is reported");
+    check(m.fileForLevel[1] == 1, "the first file of a colliding size is the one used");
+}
+
+void testExplicitChainNeedsNoFilter(const std::filesystem::path& dir) {
+    std::string why;
+    const auto levels = decodeAllLevels(dir / ktxcmp::test::kLinearMipsFixture, why);
+    if (levels.empty()) {
+        check(false, "decode: " + why);
+        return;
+    }
+
+    std::vector<SurfacePtr> loaded;
+    std::vector<ktxcmp::Extent> fileDims;
+    std::error_code ec;
+    for (const auto& entry :
+         std::filesystem::directory_iterator(dir / ktxcmp::test::kChainDir, ec)) {
+        auto png = ktxcmp::loadPng(entry.path(), ktxcmp::TransferFn::Srgb);
+        if (!png)
+            continue;
+        loaded.push_back(std::make_shared<const Surface>(std::move(*png)));
+        fileDims.push_back(ktxcmp::Extent{loaded.back()->w, loaded.back()->h});
+    }
+    if (loaded.empty()) {
+        check(false, "no reference PNGs found");
+        return;
+    }
+
+    std::vector<ktxcmp::Extent> levelDims;
+    for (const SurfacePtr& s : levels)
+        levelDims.push_back(ktxcmp::Extent{s->w, s->h});
+    const ktxcmp::ChainMatch match = ktxcmp::matchByDimension(fileDims, levelDims);
+
+    ChainInput in;
+    in.levels = levels;
+    in.mode = CompareMode::ChainVsReference;
+    in.referenceChain.assign(levels.size(), nullptr);
+    for (std::size_t i = 0; i < levelDims.size(); ++i)
+        if (match.fileForLevel[i] >= 0)
+            in.referenceChain[i] = loaded[static_cast<std::size_t>(match.fileForLevel[i])];
+
+    // Two filters that would give visibly different answers if either were used.
+    in.filter = Filter::Box;
+    auto boxRun = ktxcmp::analyseChain(in);
+    in.filter = Filter::Mitchell;
+    auto mitchellRun = ktxcmp::analyseChain(in);
+    if (!boxRun || !mitchellRun) {
+        check(false, "explicit chain analysis failed");
+        return;
+    }
+
+    check(boxRun->explicitChain, "the report records that the chain was supplied");
+
+    int exact = 0, missing = 0;
+    for (const auto& level : boxRun->levels) {
+        if (level.hasMetrics && std::isinf(level.metrics.rgb.psnr))
+            ++exact;
+        else if (!level.hasMetrics)
+            ++missing;
+    }
+    std::printf("        %d levels matched exactly, %d had no reference\n", exact, missing);
+    check(exact >= 5, "supplied references match their levels exactly");
+    check(missing >= 1, "the deliberately absent level is left unmeasured");
+
+    // The point of supplying a chain: the filter stops mattering.
+    bool identical = boxRun->levels.size() == mitchellRun->levels.size();
+    for (std::size_t i = 0; identical && i < boxRun->levels.size(); ++i) {
+        const auto& a = boxRun->levels[i];
+        const auto& b = mitchellRun->levels[i];
+        if (a.hasMetrics != b.hasMetrics)
+            identical = false;
+        else if (a.hasMetrics && a.metrics.rgb.rmse != b.metrics.rgb.rmse)
+            identical = false;
+    }
+    check(identical,
+          "with a supplied chain the filter changes nothing, which is why one is worth giving");
+}
+
+void testUnmatchedLevelsAreReportedNotFilled(const std::filesystem::path& dir) {
+    std::string why;
+    const auto levels = decodeAllLevels(dir / ktxcmp::test::kLinearMipsFixture, why);
+    if (levels.empty())
+        return;
+
+    ChainInput in;
+    in.levels = levels;
+    in.mode = CompareMode::ChainVsReference;
+    in.referenceChain.assign(levels.size(), nullptr);
+    in.referenceChain[0] = levels[0];  // only the base level has a reference
+
+    auto report = ktxcmp::analyseChain(in);
+    if (!report) {
+        check(false, "unmatched: " + report.error().message);
+        return;
+    }
+
+    check(report->levels[0].hasMetrics, "the level that has a reference is measured");
+    bool allOthersUnmeasured = true;
+    for (std::size_t i = 1; i < report->levels.size(); ++i)
+        if (report->levels[i].hasMetrics)
+            allOthersUnmeasured = false;
+    check(allOthersUnmeasured,
+          "levels without a reference are left unmeasured, not filled in from the base");
+    check(!report->levels[1].note.empty(), "an unmatched level says why it has no number");
+
+    bool warned = false;
+    for (const auto& w : report->warnings)
+        if (w.level < 0 && w.message.find("no reference image") != std::string::npos)
+            warned = true;
+    check(warned, "the missing references are reported as a chain-level warning");
+
+    const std::string csv = ktxcmp::toCsv(*report, "a.ktx2", "chain: refchain/");
+    check(csv.find("reference_chain,explicit") != std::string::npos,
+          "the CSV records that the chain was supplied rather than generated");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -289,6 +434,12 @@ int main(int argc, char** argv) {
     std::printf("validation\n");
     testValidationFlagsATruncatedChain(dir);
     testValidationFlagsAConstantLevel(dir);
+
+    std::printf("explicit reference chain\n");
+    testMatchingIsByDimensionOnly();
+    testMatchingReportsCollisionsAndStrays();
+    testExplicitChainNeedsNoFilter(dir);
+    testUnmatchedLevelsAreReportedNotFilled(dir);
 
     std::printf("export\n");
     testCsvCarriesTheSettings(dir);

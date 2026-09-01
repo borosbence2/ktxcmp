@@ -54,6 +54,7 @@ struct ChainReport {
     bool resampleLinearLight = true;
     bool metricLinearLight = false;
     bool normalMode = false;
+    bool explicitChain = false;  // shown in the UI and recorded in the CSV
 
     int baseWidth = 0;
     int baseHeight = 0;
@@ -71,6 +72,13 @@ struct ChainInput {
     std::vector<SurfacePtr> levels;
     // Mode 2 only; ignored by mode 3, which needs no reference.
     SurfacePtr reference;
+
+    // An explicit reference chain: one entry per level, null where no file
+    // matched that level. When this is set the reference is used as supplied and
+    // nothing is resampled, which is the point of providing one - the numbers
+    // stop depending on the filter. A level with no entry is reported, never
+    // quietly filled in from the base reference (PLAN.md M7).
+    std::vector<SurfacePtr> referenceChain;
 
     CompareMode mode = CompareMode::ChainVsReference;
     Filter filter = Filter::Lanczos3;

@@ -152,13 +152,102 @@ void AppState::requestCompare() {
                      format.isSigned);
 }
 
+void AppState::clearReferenceChain() {
+    slotB.chain.clear();
+    slotB.chainPaths.clear();
+    slotB.chainProblems.clear();
+    slotB.chainSource.clear();
+    m_chainAvailable = false;
+}
+
+void AppState::loadReferenceChain(const std::vector<std::filesystem::path>& paths) {
+    clearReferenceChain();
+    if (!slotA.loaded()) {
+        slotB.error = Error{ErrorCode::Internal,
+                            "load a texture into slot A first: the chain is matched to its levels"};
+        return;
+    }
+
+    // A single directory means every PNG inside it.
+    std::vector<std::filesystem::path> files;
+    std::error_code ec;
+    if (paths.size() == 1 && std::filesystem::is_directory(paths.front(), ec)) {
+        slotB.chainSource = paths.front().filename().string() + "/";
+        for (const auto& entry : std::filesystem::directory_iterator(paths.front(), ec))
+            if (entry.is_regular_file(ec) && extensionOf(entry.path()) == ".png")
+                files.push_back(entry.path());
+        std::sort(files.begin(), files.end());
+    } else {
+        files = paths;
+        slotB.chainSource = std::to_string(files.size()) + " files";
+    }
+
+    if (files.empty()) {
+        slotB.error = Error{ErrorCode::Io, "no PNG files found"};
+        return;
+    }
+
+    // Load each file, then match on dimension alone.
+    std::vector<SurfacePtr> loaded;
+    std::vector<Extent> fileDims;
+    loaded.reserve(files.size());
+    fileDims.reserve(files.size());
+    for (const auto& path : files) {
+        PngInfo info;
+        auto surface = loadPng(path, slotB.referenceTf, &info);
+        if (!surface) {
+            slotB.chainProblems.push_back(path.filename().string() + ": " +
+                                          surface.error().message);
+            loaded.push_back(nullptr);
+            fileDims.push_back(Extent{-1, -1});
+            continue;
+        }
+        loaded.push_back(std::make_shared<const Surface>(std::move(*surface)));
+        fileDims.push_back(Extent{loaded.back()->w, loaded.back()->h});
+    }
+
+    const KtxInfo& info = slotA.ktx->info();
+    std::vector<Extent> levelDims;
+    levelDims.reserve(static_cast<std::size_t>(info.levelCount));
+    for (const LevelInfo& li : info.levels)
+        levelDims.push_back(Extent{li.w, li.h});
+
+    const ChainMatch match = matchByDimension(fileDims, levelDims);
+
+    slotB.chain.assign(levelDims.size(), nullptr);
+    slotB.chainPaths.assign(levelDims.size(), {});
+    for (std::size_t level = 0; level < levelDims.size(); ++level) {
+        const int f = match.fileForLevel[level];
+        if (f < 0)
+            continue;
+        slotB.chain[level] = loaded[static_cast<std::size_t>(f)];
+        slotB.chainPaths[level] = files[static_cast<std::size_t>(f)];
+    }
+
+    for (const std::string& p : match.problems)
+        slotB.chainProblems.push_back(p);
+    for (int level : match.unmatchedLevels)
+        slotB.chainProblems.push_back("level " + std::to_string(level) + " (" +
+                                      std::to_string(levelDims[static_cast<std::size_t>(level)].w) +
+                                      "x" +
+                                      std::to_string(levelDims[static_cast<std::size_t>(level)].h) +
+                                      ") has no reference image");
+    for (int f : match.unmatchedFiles)
+        slotB.chainProblems.push_back(files[static_cast<std::size_t>(f)].filename().string() +
+                                      " matches no level");
+
+    slotB.path = files.front();
+    m_chainAvailable = false;
+}
+
 void AppState::requestChain() {
     m_chainAvailable = false;
     if (view.compareMode == CompareMode::EncodeFidelity)
         return;
     if (!slotA.loaded())
         return;
-    if (view.compareMode == CompareMode::ChainVsReference && !slotB.isReference())
+    if (view.compareMode == CompareMode::ChainVsReference && !slotB.isReference() &&
+        !slotB.hasChain())
         return;
 
     // Every level has to be decoded before the chain can be analysed. They are
@@ -174,6 +263,9 @@ void AppState::requestChain() {
     }
 
     input.reference = view.compareMode == CompareMode::ChainVsReference ? slotB.reference : nullptr;
+    if (view.compareMode == CompareMode::ChainVsReference && slotB.hasChain() &&
+        slotB.chain.size() == input.levels.size())
+        input.referenceChain = slotB.chain;
     input.mode = view.compareMode;
     input.filter = view.filter;
     input.resampleLinearLight = view.resampleLinearLight;
@@ -190,7 +282,11 @@ void AppState::requestChain() {
                    (reinterpret_cast<std::uintptr_t>(input.reference.get()) * 31ull) ^
                    (static_cast<std::uint64_t>(view.layer) << 20) ^
                    (static_cast<std::uint64_t>(view.face) << 28) ^
-                   (input.normalMode ? 0x4d2ull : 0ull);
+                   (input.normalMode ? 0x4d2ull : 0ull) ^
+                   (input.referenceChain.empty()
+                        ? 0ull
+                        : reinterpret_cast<std::uintptr_t>(input.referenceChain.front().get()) *
+                              17ull);
     m_chainAvailable = true;
     chainAnalyser.request(m_chainToken, std::move(input));
 }
@@ -201,8 +297,14 @@ std::string AppState::buildCsv() const {
     auto report = chainAnalyser.result(m_chainToken);
     if (!report || !*report)
         return {};
-    return toCsv(**report, slotA.path.string(),
-                 slotB.occupied() ? slotB.path.string() : std::string("(none)"));
+    std::string slotBDescription;
+    if (slotB.hasChain())
+        slotBDescription = "chain: " + slotB.chainSource;
+    else if (slotB.occupied())
+        slotBDescription = slotB.path.string();
+    else
+        slotBDescription = "(none)";
+    return toCsv(**report, slotA.path.string(), slotBDescription);
 }
 
 void AppState::clampSelection() {

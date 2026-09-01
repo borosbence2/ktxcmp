@@ -45,6 +45,7 @@ add_executable(ktxcmp
     src/compare/CompareEngine.cpp
     src/compare/CompareService.cpp
     src/compare/NormalMap.cpp
+    src/compare/ReferenceChain.cpp
     src/compare/Resampler.cpp
     src/decode/Decoder.cpp
     src/decode/DecodeService.cpp
@@ -119,6 +120,7 @@ set(KTXCMP_LAYER_SOURCES
     src/compare/CompareEngine.cpp
     src/compare/CompareService.cpp
     src/compare/NormalMap.cpp
+    src/compare/ReferenceChain.cpp
     src/compare/Resampler.cpp
     src/decode/Decoder.cpp
     src/decode/DecodeService.cpp

@@ -207,6 +207,63 @@ bool writeBc5Normal(const std::filesystem::path& path, int size) {
     return rc == KTX_SUCCESS;
 }
 
+// The same levels kLinearMipsFixture holds, written out as individual PNGs so
+// they can be matched back by dimension. One level is skipped on purpose.
+bool writeReferenceChain(const std::filesystem::path& dir, int size) {
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+
+    std::vector<std::uint8_t> level(static_cast<std::size_t>(size) * size * 4);
+    for (int y = 0; y < size; ++y)
+        for (int x = 0; x < size; ++x) {
+            std::uint8_t* p = level.data() + (static_cast<std::size_t>(y) * size + x) * 4;
+            const std::uint8_t v = ((x + y) % 2 == 0) ? 255 : 0;
+            p[0] = p[1] = p[2] = v;
+            p[3] = 255;
+        }
+
+    int w = size, h = size, index = 0;
+    for (;;) {
+        if (index != kChainMissingLevel) {
+            const std::string name =
+                "ref_" + std::to_string(w) + "x" + std::to_string(h) + ".png";
+            if (!writePng(dir / name, w, h, 8, level))
+                return false;
+        }
+        if (w == 1 && h == 1)
+            break;
+
+        const int nw = w > 1 ? w / 2 : 1;
+        const int nh = h > 1 ? h / 2 : 1;
+        std::vector<std::uint8_t> next(static_cast<std::size_t>(nw) * nh * 4);
+        for (int y = 0; y < nh; ++y)
+            for (int x = 0; x < nw; ++x)
+                for (int c = 0; c < 4; ++c) {
+                    const int x0 = (w > 1) ? x * 2 : 0, x1 = (w > 1) ? x0 + 1 : x0;
+                    const int y0 = (h > 1) ? y * 2 : 0, y1 = (h > 1) ? y0 + 1 : y0;
+                    const std::uint8_t s0 = level[(static_cast<std::size_t>(y0) * w + x0) * 4 + c];
+                    const std::uint8_t s1 = level[(static_cast<std::size_t>(y0) * w + x1) * 4 + c];
+                    const std::uint8_t s2 = level[(static_cast<std::size_t>(y1) * w + x0) * 4 + c];
+                    const std::uint8_t s3 = level[(static_cast<std::size_t>(y1) * w + x1) * 4 + c];
+                    float avg;
+                    if (c < 3) {
+                        avg = (srgbToLinearF(s0 / 255.0f) + srgbToLinearF(s1 / 255.0f) +
+                               srgbToLinearF(s2 / 255.0f) + srgbToLinearF(s3 / 255.0f)) / 4.0f;
+                        avg = linearToSrgbF(avg);
+                    } else {
+                        avg = (s0 + s1 + s2 + s3) / 4.0f / 255.0f;
+                    }
+                    next[(static_cast<std::size_t>(y) * nw + x) * 4 + c] =
+                        static_cast<std::uint8_t>(avg * 255.0f + 0.5f);
+                }
+        level.swap(next);
+        w = nw;
+        h = nh;
+        ++index;
+    }
+    return true;
+}
+
 std::vector<std::uint8_t> readAll(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
     return std::vector<std::uint8_t>((std::istreambuf_iterator<char>(in)),
@@ -300,6 +357,8 @@ bool writeFixtures(const std::filesystem::path& dir) {
     if (!writeCheckerChain(dir / kLinearMipsFixture, kCheckerSize, true))
         return false;
     if (!writeBc5Normal(dir / kBc5NormalFixture, kNormalSize))
+        return false;
+    if (!writeReferenceChain(dir / kChainDir, kCheckerSize))
         return false;
 
     // Every file the spec promises must now exist, or the two have drifted.

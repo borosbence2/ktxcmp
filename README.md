@@ -8,28 +8,35 @@ and [PLAN.md](PLAN.md) for the milestone order and the UI specification.
 
 ## Status
 
-**M6 — normal-map mode.** All three compare modes, plus BC5 normal-map
-interpretation. BC5 is read as a normal map by default: z is reconstructed as
-sqrt(max(0, 1 - x^2 - y^2)), both sides are remapped the same way, and the
-metrics change wholesale to mean, median, p95 and max angular error in degrees
-with the deviation of |n| from 1. PSNR is not reported for a normal map at all.
-The format banner states the detection and offers a raw RG override, which puts
-the colour metrics back. The pixel inspector follows: directions and an angle,
-not 8-bit ints.
+**M7 — reference chains and export.** All three compare modes, BC5 normal-map
+interpretation, and explicit reference chains.
 
-Mode 1 is KTX mip 0 against a PNG reference with no resampling; mode 2
-downsamples the reference to each level; mode 3 halves level N-1 and compares it
-to level N, needing no reference. Error-by-level plot you can click to select a
-level, warning badges on the mip strip, level table, and CSV export whose header
-carries mode, filter, both linear-light flags and normal-map mode.
+Mode 1 is KTX mip 0 against a PNG reference with no resampling. Mode 2
+downsamples the reference to each level, or uses a supplied chain: point
+`File > Open reference chain` at a folder of PNGs and they are matched to the
+levels by dimension. Matching is by size alone - filenames are never parsed,
+because a name like `_mip3` is a convention rather than a fact. A level with no
+matching image is reported and left unmeasured, never filled in from somewhere
+else. A supplied chain makes the filter irrelevant, which is the reason to
+supply one. Mode 3 halves level N-1 and compares it to level N, needing no
+reference.
 
-Five resampling filters (box, triangle, Kaiser, Lanczos3, Mitchell). Two
-linear-light toggles with deliberately opposite defaults: resampling in linear
-light is **on**, the linear-light *metric* is **off**. Resampled normal maps are
-renormalised before any angle is measured.
+BC5 is read as a normal map by default: z is reconstructed, both sides are
+remapped the same way, and the metrics change wholesale to angular error in
+degrees. The format banner offers a raw RG override that puts the colour
+metrics back.
+
+CSV export carries mode, filter, both linear-light flags, normal-map mode,
+whether the chain was supplied or generated, and both file paths, before any
+numbers - the per-level figures are not interpretable without them. Column names
+follow the metric family.
+
+Five resampling filters. Two linear-light toggles with deliberately opposite
+defaults: resampling in linear light is **on**, the linear-light *metric* is
+**off**. Resampled normal maps are renormalised before any angle is measured.
 
 Chain validation flags truncated chains, wrong level dimensions, constant or
-black levels, NaN and Inf, and alpha-coverage drift.
+black levels, NaN and Inf, alpha-coverage drift, and missing chain references.
 
 ## Build
 

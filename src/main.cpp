@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <vector>
 #include <string>
 
 #include "app/AppState.hpp"
@@ -75,6 +76,21 @@ void showSaveCsvDialog(SDL_Window* window, ktxcmp::AppState& app) {
     static const SDL_DialogFileFilter filters[] = {{"CSV", "csv"}};
     SDL_ShowSaveFileDialog(onCsvDestinationChosen, &app, window, filters, SDL_arraysize(filters),
                            nullptr);
+}
+
+void SDLCALL onChainChosen(void* userdata, const char* const* filelist, int) {
+    auto* app = static_cast<ktxcmp::AppState*>(userdata);
+    if (app == nullptr || filelist == nullptr || *filelist == nullptr)
+        return;  // cancelled
+    std::vector<std::filesystem::path> paths;
+    for (const char* const* it = filelist; *it != nullptr; ++it)
+        paths.push_back(fromUtf8(*it));
+    app->loadReferenceChain(paths);
+}
+
+// A folder of PNGs, or several PNGs picked at once. Either is a chain.
+void showChainDialog(SDL_Window* window, ktxcmp::AppState& app) {
+    SDL_ShowOpenFolderDialog(onChainChosen, &app, window, nullptr, false);
 }
 
 void showOpenDialog(SDL_Window* window, ktxcmp::AppState& app) {
@@ -207,6 +223,11 @@ int main(int argc, char** argv) {
         app.requestVisible();
         app.requestCompare();
         app.requestChain();
+
+        if (app.openChainDialogRequested) {
+            app.openChainDialogRequested = false;
+            showChainDialog(window, app);
+        }
 
         if (app.exportCsvRequested) {
             app.exportCsvRequested = false;

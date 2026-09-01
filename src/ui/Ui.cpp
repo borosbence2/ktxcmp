@@ -79,6 +79,13 @@ void drawMenuBar(AppState& app) {
     if (ImGui::BeginMenu("File")) {
         if (ImGui::MenuItem("Open...", "Ctrl+O"))
             app.openDialogRequested = true;
+        if (ImGui::MenuItem("Open reference chain...", nullptr, false, app.slotA.loaded()))
+            app.openChainDialogRequested = true;
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("A folder of PNGs, matched to the mip levels by dimension.%s",
+                              app.slotA.loaded() ? "" : " Load a texture first.");
+        if (ImGui::MenuItem("Clear reference chain", nullptr, false, app.slotB.hasChain()))
+            app.clearReferenceChain();
         ImGui::Separator();
         if (ImGui::MenuItem("Quit", "Alt+F4"))
             app.running = false;

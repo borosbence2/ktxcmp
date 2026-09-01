@@ -155,6 +155,30 @@ void drawReferenceBody(AppState& app, SlotState& slot) {
         ImGui::TextWrapped("%s", slot.error->message.c_str());
         return;
     }
+    // An explicit chain replaces the single reference entirely.
+    if (slot.hasChain()) {
+        ImGui::TextWrapped("%s", slot.chainSource.c_str());
+        ImGui::Separator();
+
+        std::size_t matched = 0;
+        for (const SurfacePtr& s : slot.chain)
+            if (s)
+                ++matched;
+        field("format", "PNG set");
+        field("matched", (std::to_string(matched) + "/" + std::to_string(slot.chain.size())).c_str());
+        field("chain", "explicit");
+
+        // Unmatched levels are stated, never filled in from somewhere else
+        // (PLAN.md M7).
+        if (!slot.chainProblems.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, errorColor());
+            for (const std::string& problem : slot.chainProblems)
+                ImGui::TextWrapped("%s", problem.c_str());
+            ImGui::PopStyleColor();
+        }
+        return;
+    }
+
     if (!slot.isReference()) {
         ImGui::TextDisabled("no file");
         ImGui::Separator();
@@ -173,7 +197,7 @@ void drawReferenceBody(AppState& app, SlotState& slot) {
     std::snprintf(fmt, sizeof(fmt), "PNG %d-bit", slot.referenceInfo.bitDepth);
     field("format", fmt);
     field("size", dimsText(slot.reference->w, slot.reference->h).c_str());
-    field("chain", "explicit");
+    field("chain", "generated");
 
     // PNG carries no reliable colour-space signal, so this is an assumption on
     // display, not a fact read from the file (CLAUDE.md, trap 4).

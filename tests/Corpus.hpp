@@ -65,6 +65,11 @@ inline constexpr int kCheckerSize = 64;
 inline constexpr const char* kBc5NormalFixture = "normal_bc5_64.ktx2";
 inline constexpr int kNormalSize = 64;
 
+// A folder of PNGs matching the levels of kLinearMipsFixture, with one level
+// deliberately absent so the "unmatched levels are reported" path is exercised.
+inline constexpr const char* kChainDir = "refchain";
+inline constexpr int kChainMissingLevel = 2;
+
 // Bc5Encoder.cpp.
 [[nodiscard]] std::vector<float> normalFieldXyz(int w, int h);
 [[nodiscard]] std::vector<std::uint8_t> encodeBc5Normals(int w, int h);
@@ -82,5 +87,7 @@ bool writeFixtures(const std::filesystem::path& dir);
 
 // PngWriter.cpp. No dependency beyond the standard library.
 bool writePngFixtures(const std::filesystem::path& dir);
+bool writePng(const std::filesystem::path& path, int w, int h, int bitDepth,
+              const std::vector<std::uint8_t>& samples);
 
 }  // namespace ktxcmp::test
