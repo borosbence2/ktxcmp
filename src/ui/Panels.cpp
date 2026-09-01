@@ -739,15 +739,21 @@ void drawMetrics(AppState& app) {
 // The chain report for the current settings, or nothing while it is still being
 // computed. Shared by the plot, the table and the strip badges so all three
 // agree about what they are showing.
-const ChainReport* currentChainReport(AppState& app) {
-    if (!app.chainAvailable())
+const ChainReport* currentChainReport(AppState& app, UiState& ui) {
+    if (!app.chainAvailable()) {
+        ui.chainReport.reset();
         return nullptr;
-    static ChainReport held;
-    auto report = app.chainAnalyser.result(app.chainToken());
+    }
+    const std::uint64_t token = app.chainToken();
+    if (ui.chainReport && ui.chainReportToken == token)
+        return &*ui.chainReport;  // already copied for this token
+
+    auto report = app.chainAnalyser.result(token);
     if (!report || !*report)
         return nullptr;
-    held = **report;
-    return &held;
+    ui.chainReport = **report;
+    ui.chainReportToken = token;
+    return &*ui.chainReport;
 }
 
 // Error by level. You scan this; you do not read fifteen rows of numbers, which
@@ -945,7 +951,7 @@ void drawViewportPanel(AppState& app, UiState& ui) {
     ImGui::End();
 }
 
-void drawAnalysisPanel(AppState& app) {
+void drawAnalysisPanel(AppState& app, UiState& ui) {
     if (ImGui::Begin(kWinAnalysis)) {
         drawFormatBanner(app);
         ImGui::Spacing();
@@ -953,7 +959,7 @@ void drawAnalysisPanel(AppState& app) {
         ImGui::Spacing();
         drawMetrics(app);
         ImGui::Spacing();
-        const ChainReport* report = currentChainReport(app);
+        const ChainReport* report = currentChainReport(app, ui);
         drawErrorPlot(app, report);
         ImGui::Spacing();
         drawLevelTable(app, report);
@@ -1010,7 +1016,7 @@ void drawMipStripPanel(AppState& app, UiState& ui) {
         // Warnings live on the thumbnails, not in a separate problems panel: the
         // strip is already the navigation, so one glance shows which level to
         // look at (PLAN.md, bottom).
-        const ChainReport* report = currentChainReport(app);
+        const ChainReport* report = currentChainReport(app, ui);
 
         const KtxInfo& info = app.slotA.ktx->info();
         const int levels = info.levelCount;

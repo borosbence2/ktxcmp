@@ -1,11 +1,13 @@
 #pragma once
 
+#include "compare/ChainAnalysis.hpp"
 #include "ui/DisplayCache.hpp"
 #include "ui/ImageTexture.hpp"
 
 #include <imgui.h>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace ktxcmp {
@@ -32,6 +34,13 @@ struct UiState {
 
     // Channel mask the textures were built for; a change rebuilds them.
     std::uint32_t builtChannels = 0xFFFFFFFFu;
+
+    // The chain report the plot, table and strip badges all read. Held here
+    // rather than in a function-local static: it is per-window state, not
+    // program state, and copying it out of the service every frame allocated
+    // a dozen vectors for nothing.
+    std::optional<ChainReport> chainReport;
+    std::uint64_t chainReportToken = 0;
 
     float zoom = 1.0f;
     float panX = 0.0f;
@@ -84,7 +93,7 @@ void drawFrame(AppState& app, UiState& ui);
 // Panels. Each opens and closes its own dock window.
 void drawSourcesPanel(AppState& app);
 void drawViewportPanel(AppState& app, UiState& ui);
-void drawAnalysisPanel(AppState& app);
+void drawAnalysisPanel(AppState& app, UiState& ui);
 void drawMipStripPanel(AppState& app, UiState& ui);
 void drawStatusBar(AppState& app, UiState& ui);
 

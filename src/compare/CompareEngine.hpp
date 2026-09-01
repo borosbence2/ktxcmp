@@ -46,10 +46,6 @@ struct CompareResult {
 // functions (CLAUDE.md rule 4 - a wrong metric is worse than no metric).
 [[nodiscard]] Result<CompareResult> compare(const Surface& a, const Surface& b, bool linearLight);
 
-// Absolute difference, amplified, as a surface the viewer can display like any
-// other. Alpha is set opaque: the diff is about colour error.
-[[nodiscard]] Result<Surface> differenceSurface(const Surface& a, const Surface& b, int gain);
-
 [[nodiscard]] std::string formatPsnr(double psnr);
 
 }  // namespace ktxcmp

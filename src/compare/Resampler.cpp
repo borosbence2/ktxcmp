@@ -228,10 +228,4 @@ Result<Surface> resample(const Surface& src, int dstW, int dstH, Filter filter, 
     return dst;
 }
 
-Result<Surface> halveSurface(const Surface& src, Filter filter, bool linearLight) {
-    const int w = src.w > 1 ? src.w / 2 : 1;
-    const int h = src.h > 1 ? src.h / 2 : 1;
-    return resample(src, w, h, filter, linearLight);
-}
-
 }  // namespace ktxcmp

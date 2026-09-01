@@ -1,0 +1,128 @@
+name: release
+
+# Tag a commit to publish. The build is the same one CI runs; the difference is
+# that the console is turned off on Windows and the macOS app is bundled, signed
+# where credentials exist, and attached to a GitHub Release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            cmake_args: "-DKTXCMP_CONSOLE=OFF"
+          - name: macos-arm64
+            os: macos-14
+            cmake_args: "-DCMAKE_OSX_ARCHITECTURES=arm64"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: >
+          cmake -B build -S .
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          ${{ matrix.cmake_args }}
+
+      - name: Build
+        run: cmake --build build --config RelWithDebInfo --parallel
+
+      # A release that fails its own tests is not a release.
+      - name: Test
+        run: ctest --test-dir build --build-config RelWithDebInfo --output-on-failure
+
+      # /MT means there is no runtime to ship alongside it.
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp build/bin/RelWithDebInfo/ktxcmp.exe dist/ 2>/dev/null || cp build/bin/ktxcmp.exe dist/
+          cp README.md LICENSE dist/ 2>/dev/null || true
+          cd dist && 7z a ../ktxcmp-windows-x64.zip .
+
+      # Signing and notarizing need an Apple Developer account. Without the
+      # secrets the app is still built and published, just unsigned: Gatekeeper
+      # will require a right-click Open on first launch. The step says which it
+      # was rather than failing silently either way.
+      - name: Sign and notarize (macOS)
+        if: runner.os == 'macOS'
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+          NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          APP="build/bin/ktxcmp.app"
+          if [ -z "${CERT_P12}" ]; then
+            echo "::warning::No signing certificate configured; publishing an unsigned app."
+            echo "SIGNED=no" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # A throwaway keychain, so nothing is left behind on the runner.
+          KEYCHAIN=build.keychain
+          security create-keychain -p runner "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p runner "$KEYCHAIN"
+          echo "$CERT_P12" | base64 --decode > cert.p12
+          security import cert.p12 -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k runner "$KEYCHAIN"
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | awk 'NR==1{print $2}')
+
+          codesign --force --deep --options runtime --timestamp \
+                   --entitlements packaging/entitlements.plist \
+                   --sign "$IDENTITY" "$APP"
+          codesign --verify --strict --verbose=2 "$APP"
+
+          if [ -n "${NOTARY_APPLE_ID}" ]; then
+            ditto -c -k --keepParent "$APP" notarize.zip
+            xcrun notarytool submit notarize.zip --wait \
+                  --apple-id "$NOTARY_APPLE_ID" \
+                  --password "$NOTARY_PASSWORD" \
+                  --team-id "$NOTARY_TEAM_ID"
+            # Stapling is what lets it open with no network access.
+            xcrun stapler staple "$APP"
+            echo "SIGNED=signed and notarized" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Signed but not notarized; no notary credentials configured."
+            echo "SIGNED=signed only" >> "$GITHUB_ENV"
+          fi
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist
+          ditto -c -k --keepParent build/bin/ktxcmp.app ktxcmp-macos-arm64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ktxcmp-${{ matrix.name }}
+          path: ktxcmp-*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*.zip
+          generate_release_notes: true

@@ -212,32 +212,6 @@ Result<CompareResult> compare(const Surface& a, const Surface& b, bool linearLig
     return out;
 }
 
-Result<Surface> differenceSurface(const Surface& a, const Surface& b, int gain) {
-    if (a.w != b.w || a.h != b.h)
-        return fail(ErrorCode::Internal, "cannot difference surfaces of different sizes");
-
-    Surface out;
-    out.w = a.w;
-    out.h = a.h;
-    out.d = 1;
-    out.tf = a.tf;
-    out.rgba.assign(a.texelCount() * 4u, 1.0f);
-
-    const float scale = static_cast<float>(gain > 0 ? gain : 1);
-    for (std::size_t i = 0; i < a.texelCount(); ++i) {
-        const float* pa = a.rgba.data() + i * 4u;
-        const float* pb = b.rgba.data() + i * 4u;
-        float* dst = out.rgba.data() + i * 4u;
-        for (int c = 0; c < 3; ++c) {
-            const float d = pa[c] - pb[c];
-            dst[c] = std::isfinite(d) ? std::fabs(d) * scale
-                                      : std::numeric_limits<float>::quiet_NaN();
-        }
-        dst[3] = 1.0f;
-    }
-    return out;
-}
-
 std::string formatPsnr(double psnr) {
     if (std::isinf(psnr))
         return "identical";

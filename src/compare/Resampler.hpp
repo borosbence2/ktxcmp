@@ -23,7 +23,4 @@ enum class Filter { Box, Triangle, Kaiser, Lanczos3, Mitchell };
 [[nodiscard]] Result<Surface> resample(const Surface& src, int dstW, int dstH, Filter filter,
                                        bool linearLight);
 
-// Convenience for mode 3: halve both axes, floor at 1, matching the mip rule.
-[[nodiscard]] Result<Surface> halveSurface(const Surface& src, Filter filter, bool linearLight);
-
 }  // namespace ktxcmp

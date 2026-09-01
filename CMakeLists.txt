@@ -98,8 +98,28 @@ else()
     target_compile_options(ktxcmp PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-# M8 flips this on for a windowed release build; the console is useful now.
-# set_target_properties(ktxcmp PROPERTIES WIN32_EXECUTABLE TRUE)
+# ------------------------------------------------------------ packaging ----
+
+# The console carries SDL_Log output and the frame-time summary, which is worth
+# having while developing and not worth shipping. The release job turns it off.
+option(KTXCMP_CONSOLE "Keep a console window on Windows" ON)
+
+if(WIN32 AND NOT KTXCMP_CONSOLE)
+    set_target_properties(ktxcmp PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
+
+if(APPLE)
+    # A bundle, so Finder can associate the document types the plist declares.
+    # The app already accepts paths on argv, which is how Open With and a Finder
+    # drop both deliver them.
+    set_target_properties(ktxcmp PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_BUNDLE_NAME "ktxcmp"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "org.ktxcmp.ktxcmp"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/packaging/Info.plist.in")
+endif()
 
 # ---------------------------------------------------------------- tests -----
 # Hand-rolled harnesses, no framework (CLAUDE.md). They link the layer under

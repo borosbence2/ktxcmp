@@ -283,7 +283,7 @@ void drawFrame(AppState& app, UiState& ui) {
 
     drawSourcesPanel(app);
     drawViewportPanel(app, ui);
-    drawAnalysisPanel(app);
+    drawAnalysisPanel(app, ui);
     drawMipStripPanel(app, ui);
 }
 

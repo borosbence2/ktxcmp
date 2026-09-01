@@ -200,20 +200,6 @@ void testLinearLightChangesTheNumber() {
           "the result carries the flag, so output can be labelled");
 }
 
-void testDifferenceSurface() {
-    Surface a = makeSurface(4, 4);
-    Surface b = makeSurface(4, 4);
-    a.rgba[0] = 0.25f;
-    auto d = ktxcmp::differenceSurface(a, b, 4);
-    if (!d) {
-        check(false, "difference: " + d.error().message);
-        return;
-    }
-    checkNear(d->rgba[0], 1.0, 1e-6, "the difference is amplified by the gain");
-    check(d->rgba[3] == 1.0f, "the difference surface is opaque");
-    check(d->rgba[4] == 0.0f, "an identical texel differences to zero");
-}
-
 // --------------------------------------------------------------- PNG load ---
 
 void testPngLoads(const std::filesystem::path& dir) {
@@ -404,7 +390,6 @@ int main(int argc, char** argv) {
     std::printf("robustness\n");
     testNonFiniteIsExcludedAndCounted();
     testLinearLightChangesTheNumber();
-    testDifferenceSurface();
 
     std::printf("ASTC encode fidelity\n");
     testAstcEncodePsnrIsSane(dir);

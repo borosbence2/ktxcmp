@@ -180,16 +180,6 @@ void testFilterChoiceChangesTheResult() {
           "different filters give different results, so reporting the filter matters");
 }
 
-void testHalveFollowsTheMipRule() {
-    const Surface src = constantSurface(9, 1, 0.25f);
-    auto dst = ktxcmp::halveSurface(src, Filter::Box, true);
-    if (!dst) {
-        check(false, "halve: " + dst.error().message);
-        return;
-    }
-    check(dst->w == 4 && dst->h == 1, "halving floors like max(1, base >> 1) does");
-}
-
 void testRefusesEmpty() {
     const Surface empty;
     check(!ktxcmp::resample(empty, 4, 4, Filter::Box, true), "an empty surface is refused");
@@ -204,7 +194,6 @@ int main() {
     testConstantStaysConstant();
     std::printf("arithmetic\n");
     testBoxHalvingIsA2x2Average();
-    testHalveFollowsTheMipRule();
     std::printf("colour space\n");
     testLinearLightVersusGammaSpace();
     testAlphaIsNotGammaCorrected();

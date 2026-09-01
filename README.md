@@ -43,19 +43,46 @@ black levels, NaN and Inf, alpha-coverage drift, and missing chain references.
 ```
 cmake -B build -S . -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 ```
 
 The binary lands in `build/bin/`. The first configure clones SDL3, Dear ImGui,
 astc-encoder and KTX-Software into `build/_deps` and the first build compiles all
 of them, which takes several minutes; later builds are incremental.
 
-- **Windows**: MSVC x64, static CRT (`/MT`), so the executable is portable.
-  With the default Visual Studio generator, add `--config RelWithDebInfo` to the
-  build command. A developer command prompt plus `-G Ninja` is faster.
-- **macOS**: add `-DCMAKE_OSX_ARCHITECTURES=arm64`.
+- **Windows**: MSVC x64, static CRT (`/MT`), so the executable is portable with
+  no runtime to ship beside it. With the default Visual Studio generator, add
+  `--config RelWithDebInfo` to the build command. A developer command prompt plus
+  `-G Ninja` is faster. `-DKTXCMP_CONSOLE=OFF` drops the console window, which is
+  what the release build does; the console carries `SDL_Log` output and the
+  frame-time summary and is worth having while developing.
+- **macOS**: add `-DCMAKE_OSX_ARCHITECTURES=arm64`. The app is built as a bundle
+  so Finder can associate the document types `packaging/Info.plist.in` declares
+  (`.ktx2`, `.ktx`, `.png`); Open With and a Finder drop both arrive as command
+  line arguments, which the app already accepts.
 
 `CMakePresets.json` wraps the above as the `default`, `debug` and `macos-arm64`
 presets.
+
+## Releasing
+
+Push a `v*` tag. `.github/workflows/release.yml` builds both platforms, runs the
+tests, and attaches a zip per platform to a GitHub Release.
+
+macOS signing and notarization need an Apple Developer account. Set these
+repository secrets to enable them:
+
+| Secret | What it is |
+|---|---|
+| `MACOS_CERT_P12` | Developer ID Application certificate, base64 of the .p12 |
+| `MACOS_CERT_PASSWORD` | password for that .p12 |
+| `MACOS_NOTARY_APPLE_ID` | Apple ID for notarytool |
+| `MACOS_NOTARY_PASSWORD` | app-specific password for that Apple ID |
+| `MACOS_NOTARY_TEAM_ID` | developer team id |
+
+Without them the release still publishes, unsigned, and the workflow says so in
+a warning rather than failing. An unsigned app needs a right-click Open on first
+launch.
 
 ## Dependencies
 
